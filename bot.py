@@ -22,9 +22,15 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS actions (
     id INTEGER PRIMARY KEY,
     action TEXT,
-    video_id TEXT,
+    video_id TEXT UNIQUE,
     group_id TEXT,
     timestamp DATETIME
+)
+""")
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS view_logs (
+    video_id TEXT UNIQUE,
+    last_view_update DATETIME
 )
 """)
 conn.commit()
@@ -67,12 +73,72 @@ def send_analytics(update: Update):
 
     update.message.reply_text(report)
 
+def increase_views(video_id, views):
+    """Simulate increasing video views (replace this with real API calls if needed)."""
+    print(f"✅ Increased {views} views on video {video_id}")
+
+def process_new_videos(channel_id):
+    """Automatically check for new videos, comment, and increase views."""
+    videos = fetch_latest_videos(channel_id)
+    
+    for video in videos:
+        video_id = video["id"]["videoId"]
+        title = video["snippet"]["title"]
+        
+        # Check if video is already processed
+        cursor.execute("SELECT * FROM actions WHERE video_id = ?", (video_id,))
+        if cursor.fetchone():
+            continue  # Skip already processed videos
+
+        # Generate and send comment
+        comment = generate_comment(title)
+        print(f"💬 Commenting on {title}: {comment}")
+        
+        # Log the action
+        log_action("commented", video_id)
+
+        # Increase views (10 for new videos)
+        increase_views(video_id, 10)
+        
+        # Log view update
+        cursor.execute("""
+        INSERT INTO view_logs (video_id, last_view_update)
+        VALUES (?, datetime('now'))
+        """, (video_id,))
+        conn.commit()
+
+def process_old_videos():
+    """Increase views on old videos weekly."""
+    cursor.execute("""
+    SELECT video_id, last_view_update FROM view_logs
+    WHERE last_view_update <= datetime('now', '-7 days')
+    """)
+    
+    old_videos = cursor.fetchall()
+    
+    for video_id, _ in old_videos:
+        increase_views(video_id, 20)
+        
+        # Update last view update timestamp
+        cursor.execute("""
+        UPDATE view_logs SET last_view_update = datetime('now')
+        WHERE video_id = ?
+        """, (video_id,))
+        conn.commit()
+
 def main():
     updater = Updater(TELEGRAM_BOT_TOKEN)
     dispatcher = updater.dispatcher
 
     # Command handlers
     dispatcher.add_handler(CommandHandler("report", send_analytics))
+
+    # Start automated processes
+    channel_id = "YOUR_CHANNEL_ID_HERE"  # Replace with your channel ID
+    while True:
+        process_new_videos(channel_id)
+        process_old_videos()
+        time.sleep(600)  # Wait 10 minutes before checking again
 
     updater.start_polling()
     updater.idle()
