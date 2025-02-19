@@ -1,4 +1,4 @@
 python-telegram-bot==20.0
 google-api-python-client
-openai
-python-dotenv  # <== This is missing, but needed for .env support
+google-generativeai  # Added to fix the missing module error
+python-dotenv
