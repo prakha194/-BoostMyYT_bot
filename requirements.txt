@@ -1,4 +1,4 @@
 python-telegram-bot==20.0
 google-api-python-client
-google-generativeai  # Added to fix the missing module error
-python-dotenv
+google-generativeai  # Added for Gemini API
+python-dotenv  # Needed for .env support
