@@ -10,6 +10,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")
 YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID")
+YOUR_CHAT_ID = os.getenv("YOUR_CHAT_ID")  # Your private chat ID with the bot
 
 # Initialize APIs
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -26,8 +27,8 @@ def fetch_latest_videos():
     return request.execute().get("items", [])
 
 def send_task_update(message):
-    """Send a task update to the Telegram group."""
-    bot.send_message(chat_id=TELEGRAM_GROUP_ID, text=message)
+    """Send a task update to your private chat with the bot."""
+    bot.send_message(chat_id=YOUR_CHAT_ID, text=message)
 
 def boost_views(video_id, views):
     """Simulate adding views to a video."""
@@ -40,7 +41,7 @@ def share_video(video):
     video_title = video["snippet"]["title"]
     video_url = f"https://youtube.com/watch?v={video_id}"
     bot.send_message(chat_id=TELEGRAM_GROUP_ID, text=f"🎥 New video: {video_title}\n{video_url}")
-    send_task_update(f"✅ Shared video: {video_title}")
+    send_task_update(f"✅ Shared video: {video_title}\nLink: {video_url}")
 
 def weekly_views_boosting():
     """Boost views for the latest and older videos."""
