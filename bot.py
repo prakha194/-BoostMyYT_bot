@@ -1,21 +1,25 @@
 import os
 import time
 import sqlite3
+import asyncio
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler
 from googleapiclient.discovery import build
-import openai  # Corrected OpenAI import
+import google.generativeai as genai  # Replacing OpenAI with Gemini API
 
 # Load environment variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # Replacing OpenAI key with Gemini
 YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID")
 
 # Initialize APIs
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
-openai.api_key = OPENAI_API_KEY
+
+# Configure Gemini API
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-pro")
 
 # Database setup
 def get_db_connection():
@@ -50,15 +54,17 @@ def fetch_latest_videos(channel_id):
     )
     return request.execute().get("items", [])
 
-# Generate AI comment
+# Generate AI comment using Google Gemini
 def generate_comment(video_title):
     """Generate an AI-powered comment for a YouTube video."""
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": f"Write a friendly comment for a YouTube video titled: {video_title}"}],
-        max_tokens=50
-    )
-    return response["choices"][0]["message"]["content"].strip()
+    prompt = f"Write a friendly and engaging comment for a YouTube video titled: {video_title}"
+
+    try:
+        response = model.generate_content(prompt)
+        return response.text.strip() if response and response.text else "Great video!"
+    
+    except Exception as e:
+        return f"Error generating comment: {str(e)}"
 
 # Log bot actions
 def log_action(action, video_id, group_id=None):
