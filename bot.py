@@ -165,8 +165,11 @@ def main():
     application.add_error_handler(error_handler)
 
     # Start polling
-    asyncio.create_task(background_task())  # Start background processing
-    application.run_polling()
+    import asyncio
 
+async def main():
+    asyncio.create_task(background_task())
+
+asyncio.run(main())
 if __name__ == "__main__":
     main()
