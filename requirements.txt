@@ -1,4 +1,3 @@
 python-telegram-bot==20.8  
 google-api-python-client==2.118.0  
-google-generativeai==0.4.0  
-sqlite3  # (built-in, but some environments may require explicit mention)
+google-generativeai==0.4.0
