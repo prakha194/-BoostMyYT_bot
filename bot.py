@@ -1,178 +1,123 @@
 import os
-import time
 import sqlite3
-import asyncio
-from telegram import Bot, Update
-from telegram.ext import Application, CommandHandler
+import time
+import schedule
+from telegram import Bot
+from telegram.ext import CommandHandler, Updater
 from googleapiclient.discovery import build
-import google.generativeai as genai  # Replacing OpenAI with Gemini API
+import google.generativeai as genai
 
 # Load environment variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # Replacing OpenAI key with Gemini
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")
 YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID")
 
 # Initialize APIs
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
-
-# Configure Gemini API
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-pro")
 
-# Database setup
-def get_db_connection():
-    conn = sqlite3.connect("bot_actions.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS actions (
-        id INTEGER PRIMARY KEY,
-        action TEXT,
-        video_id TEXT UNIQUE,
-        group_id TEXT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS view_logs (
-        video_id TEXT UNIQUE,
-        last_view_update DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-    conn.commit()
-    return conn, cursor
+# Database for logging actions
+conn = sqlite3.connect("bot_actions.db", check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS actions (
+    id INTEGER PRIMARY KEY,
+    action TEXT,
+    video_id TEXT,
+    views_added INTEGER,
+    timestamp DATETIME
+)
+""")
+conn.commit()
 
-# Fetch latest videos
-def fetch_latest_videos(channel_id):
-    """Fetch latest videos from a YouTube channel."""
+def fetch_latest_videos():
+    """Fetch latest videos from your YouTube channel."""
     request = youtube.search().list(
         part="snippet",
-        channelId=channel_id,
-        maxResults=5,
+        channelId=YOUTUBE_CHANNEL_ID,
+        maxResults=10,
         order="date"
     )
     return request.execute().get("items", [])
 
-# Generate AI comment using Google Gemini
 def generate_comment(video_title):
-    """Generate an AI-powered comment for a YouTube video."""
-    prompt = f"Write a friendly and engaging comment for a YouTube video titled: {video_title}"
+    """Generate a context-aware comment using Gemini."""
+    model = genai.GenerativeModel('gemini-pro')
+    response = model.generate_content(f"Generate a friendly comment for a YouTube video titled: {video_title}")
+    return response.text
 
-    try:
-        response = model.generate_content(prompt)
-        return response.text.strip() if response and response.text else "Great video!"
-    
-    except Exception as e:
-        return f"Error generating comment: {str(e)}"
+def boost_views(video_id, views):
+    """Simulate adding views to a video."""
+    # Replace this with your actual views-boosting logic (e.g., using a views service API).
+    print(f"Added {views} views to video: {video_id}")
+    log_action(f"Added {views} views", video_id, views)
 
-# Log bot actions
-def log_action(action, video_id, group_id=None):
+def log_action(action, video_id, views_added=0):
     """Log bot actions to the database."""
-    conn, cursor = get_db_connection()
     cursor.execute("""
-    INSERT OR IGNORE INTO actions (action, video_id, group_id)
-    VALUES (?, ?, ?)
-    """, (action, video_id, group_id))
+    INSERT INTO actions (action, video_id, views_added, timestamp)
+    VALUES (?, ?, ?, datetime('now'))
+    """, (action, video_id, views_added))
     conn.commit()
-    conn.close()
 
-# Send analytics
-async def send_analytics(update: Update, _):
-    """Send live analytics to the user."""
-    conn, cursor = get_db_connection()
+def share_video(video):
+    """Share a video in the Telegram group."""
+    video_id = video["id"]["videoId"]
+    video_title = video["snippet"]["title"]
+    video_url = f"https://youtube.com/watch?v={video_id}"
+    bot.send_message(chat_id=TELEGRAM_GROUP_ID, text=f"🎥 New video: {video_title}\n{video_url}")
+    log_action("Shared video", video_id)
+
+def weekly_views_boosting():
+    """Boost views for the latest and older videos."""
+    videos = fetch_latest_videos()
+    if not videos:
+        return
+
+    # Boost 10 views to the newest video
+    newest_video = videos[0]
+    boost_views(newest_video["id"]["videoId"], 10)
+
+    # Boost 10 views to older videos
+    for video in videos[1:6]:  # Distribute across 5 older videos
+        boost_views(video["id"]["videoId"], 2)  # 2 views per video
+
+def send_analytics(update: Update, context):
+    """Send analytics report to the user."""
     cursor.execute("SELECT * FROM actions ORDER BY timestamp DESC")
     actions = cursor.fetchall()
-    conn.close()
 
-    report = "📊 Live Analytics:\n\n"
-    for action in actions[:10]:  # Show only last 10 actions
-        report += f"- {action[1]} on video {action[2]}\n"
+    report = "📊 Bot Analytics:\n\n"
+    for action in actions:
+        report += f"- {action[1]} on video {action[2]} (Views added: {action[3]})\n"
 
-    await update.message.reply_text(report)
+    update.message.reply_text(report)
 
-# Increase views (placeholder function)
-def increase_views(video_id, views):
-    """Simulate increasing video views."""
-    print(f"✅ Increased {views} views on video {video_id}")
+def start(update: Update, context):
+    """Start command handler."""
+    update.message.reply_text("Welcome to BoostMyYT_bot! Use /report to get analytics.")
 
-# Process new videos
-def process_new_videos():
-    """Check for new videos and automate engagement."""
-    videos = fetch_latest_videos(YOUTUBE_CHANNEL_ID)
-    conn, cursor = get_db_connection()
-
-    for video in videos:
-        video_id = video["id"].get("videoId")
-        if not video_id:
-            continue  # Skip if not a video
-
-        title = video["snippet"]["title"]
-
-        # Check if already processed
-        cursor.execute("SELECT * FROM actions WHERE video_id = ?", (video_id,))
-        if cursor.fetchone():
-            continue
-
-        # Generate and send comment
-        comment = generate_comment(title)
-        print(f"💬 Commenting on {title}: {comment}")
-
-        # Log actions
-        log_action("commented", video_id)
-
-        # Increase views
-        increase_views(video_id, 10)
-
-        # Log view update
-        cursor.execute("""
-        INSERT OR REPLACE INTO view_logs (video_id, last_view_update)
-        VALUES (?, datetime('now'))
-        """, (video_id,))
-        conn.commit()
-
-    conn.close()
-
-# Process old videos (increase views weekly)
-def process_old_videos():
-    """Increase views on old videos every 7 days."""
-    conn, cursor = get_db_connection()
-    cursor.execute("""
-    SELECT video_id FROM view_logs
-    WHERE last_view_update <= datetime('now', '-7 days')
-    """)
-    
-    old_videos = cursor.fetchall()
-    for video_id in old_videos:
-        increase_views(video_id[0], 20)
-        cursor.execute("""
-        UPDATE view_logs SET last_view_update = datetime('now')
-        WHERE video_id = ?
-        """, (video_id[0],))
-        conn.commit()
-
-    conn.close()
-
-# Scheduled background task
-async def background_task():
-    """Run automated tasks in the background."""
-    while True:
-        process_new_videos()
-        process_old_videos()
-        await asyncio.sleep(600)  # Wait 10 minutes before checking again
-
-# Main function
-async def main():
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+def main():
+    """Start the bot."""
+    updater = Updater(TELEGRAM_BOT_TOKEN)
+    dispatcher = updater.dispatcher
 
     # Command handlers
-    application.add_handler(CommandHandler("report", send_analytics))
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(CommandHandler("report", send_analytics))
 
-    # Start background tasks
-    asyncio.create_task(background_task())
+    # Schedule weekly views boosting
+    schedule.every().week.do(weekly_views_boosting)
 
-    # Start polling
-    await application.run_polling()
+    updater.start_polling()
+
+    # Keep the bot running
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
