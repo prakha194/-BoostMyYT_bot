@@ -2,7 +2,7 @@ import os
 import time
 import schedule
 from telegram import Bot, Update
-from telegram.ext import Updater, CommandHandler
+from telegram.ext import Application, CommandHandler
 from googleapiclient.discovery import build
 
 # Load environment variables
@@ -81,8 +81,8 @@ def help_command(update: Update, context):
 
 def main():
     """Start the bot."""
-    updater = Updater(TELEGRAM_BOT_TOKEN)
-    dispatcher = updater.dispatcher
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    dispatcher = app.dispatcher
 
     # Command handlers
     dispatcher.add_handler(CommandHandler("start", start))
@@ -92,7 +92,7 @@ def main():
     # Schedule weekly views boosting
     schedule.every().week.do(weekly_views_boosting)
 
-    updater.start_polling()
+    app.run_polling()
 
     # Keep the bot running
     while True:
