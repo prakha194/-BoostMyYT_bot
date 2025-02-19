@@ -1,5 +1,4 @@
 import os
-import sqlite3
 import time
 import schedule
 from telegram import Bot
@@ -19,20 +18,6 @@ bot = Bot(token=TELEGRAM_BOT_TOKEN)
 youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Database for logging actions
-conn = sqlite3.connect("bot_actions.db", check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS actions (
-    id INTEGER PRIMARY KEY,
-    action TEXT,
-    video_id TEXT,
-    views_added INTEGER,
-    timestamp DATETIME
-)
-""")
-conn.commit()
-
 def fetch_latest_videos():
     """Fetch latest videos from your YouTube channel."""
     request = youtube.search().list(
@@ -51,17 +36,7 @@ def generate_comment(video_title):
 
 def boost_views(video_id, views):
     """Simulate adding views to a video."""
-    # Replace this with your actual views-boosting logic (e.g., using a views service API).
     print(f"Added {views} views to video: {video_id}")
-    log_action(f"Added {views} views", video_id, views)
-
-def log_action(action, video_id, views_added=0):
-    """Log bot actions to the database."""
-    cursor.execute("""
-    INSERT INTO actions (action, video_id, views_added, timestamp)
-    VALUES (?, ?, ?, datetime('now'))
-    """, (action, video_id, views_added))
-    conn.commit()
 
 def share_video(video):
     """Share a video in the Telegram group."""
@@ -69,7 +44,6 @@ def share_video(video):
     video_title = video["snippet"]["title"]
     video_url = f"https://youtube.com/watch?v={video_id}"
     bot.send_message(chat_id=TELEGRAM_GROUP_ID, text=f"🎥 New video: {video_title}\n{video_url}")
-    log_action("Shared video", video_id)
 
 def weekly_views_boosting():
     """Boost views for the latest and older videos."""
@@ -87,14 +61,7 @@ def weekly_views_boosting():
 
 def send_analytics(update: Update, context):
     """Send analytics report to the user."""
-    cursor.execute("SELECT * FROM actions ORDER BY timestamp DESC")
-    actions = cursor.fetchall()
-
-    report = "📊 Bot Analytics:\n\n"
-    for action in actions:
-        report += f"- {action[1]} on video {action[2]} (Views added: {action[3]})\n"
-
-    update.message.reply_text(report)
+    update.message.reply_text("Analytics are not available without SQLite.")
 
 def start(update: Update, context):
     """Start command handler."""
