@@ -1,8 +1,8 @@
 import os
 import time
 import schedule
-from telegram import Bot
-from telegram.ext import CommandHandler, Updater
+from telegram import Bot, Update
+from telegram.ext import Updater, CommandHandler
 from googleapiclient.discovery import build
 import google.generativeai as genai
 
