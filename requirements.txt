@@ -1,3 +1,6 @@
-python-telegram-bot==20.8  
-google-api-python-client==2.118.0  
-google-generativeai==0.4.0
+python-telegram-bot
+google-api-python-client
+google-generativeai
+sqlite3
+schedule
+python-dotenv
