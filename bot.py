@@ -4,19 +4,16 @@ import schedule
 from telegram import Bot, Update
 from telegram.ext import Updater, CommandHandler
 from googleapiclient.discovery import build
-import google.generativeai as genai
 
 # Load environment variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")
 YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID")
 
 # Initialize APIs
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
-genai.configure(api_key=GEMINI_API_KEY)
 
 def fetch_latest_videos():
     """Fetch latest videos from your YouTube channel."""
@@ -27,12 +24,6 @@ def fetch_latest_videos():
         order="date"
     )
     return request.execute().get("items", [])
-
-def generate_comment(video_title):
-    """Generate a context-aware comment using Gemini."""
-    model = genai.GenerativeModel('gemini-pro')
-    response = model.generate_content(f"Generate a friendly comment for a YouTube video titled: {video_title}")
-    return response.text
 
 def send_task_update(message):
     """Send a task update to the Telegram group."""
@@ -71,16 +62,31 @@ def send_analytics(update: Update, context):
 
 def start(update: Update, context):
     """Start command handler."""
-    update.message.reply_text("Welcome to BoostMyYT_bot! Use /report to get analytics.")
+    update.message.reply_text(
+        "Welcome to BoostMyYT_bot! 🚀\n"
+        "Use the following commands:\n"
+        "- /report: Get analytics.\n"
+        "- /help: Show this help message."
+    )
+
+def help_command(update: Update, context):
+    """Help command handler."""
+    update.message.reply_text(
+        "🤖 BoostMyYT_bot Help:\n"
+        "- /start: Start the bot.\n"
+        "- /report: Get analytics.\n"
+        "- /help: Show this help message."
+    )
 
 def main():
     """Start the bot."""
-    updater = Updater(TELEGRAM_BOT_TOKEN, use_context=True)
+    updater = Updater(TELEGRAM_BOT_TOKEN)
     dispatcher = updater.dispatcher
 
     # Command handlers
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(CommandHandler("report", send_analytics))
+    dispatcher.add_handler(CommandHandler("help", help_command))
 
     # Schedule weekly views boosting
     schedule.every().week.do(weekly_views_boosting)
