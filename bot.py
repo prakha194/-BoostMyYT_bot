@@ -34,9 +34,14 @@ def generate_comment(video_title):
     response = model.generate_content(f"Generate a friendly comment for a YouTube video titled: {video_title}")
     return response.text
 
+def send_task_update(message):
+    """Send a task update to the Telegram group."""
+    bot.send_message(chat_id=TELEGRAM_GROUP_ID, text=message)
+
 def boost_views(video_id, views):
     """Simulate adding views to a video."""
     print(f"Added {views} views to video: {video_id}")
+    send_task_update(f"✅ Added {views} views to video: {video_id}")
 
 def share_video(video):
     """Share a video in the Telegram group."""
@@ -44,6 +49,7 @@ def share_video(video):
     video_title = video["snippet"]["title"]
     video_url = f"https://youtube.com/watch?v={video_id}"
     bot.send_message(chat_id=TELEGRAM_GROUP_ID, text=f"🎥 New video: {video_title}\n{video_url}")
+    send_task_update(f"✅ Shared video: {video_title}")
 
 def weekly_views_boosting():
     """Boost views for the latest and older videos."""
@@ -69,7 +75,7 @@ def start(update: Update, context):
 
 def main():
     """Start the bot."""
-    updater = Updater(TELEGRAM_BOT_TOKEN)
+    updater = Updater(TELEGRAM_BOT_TOKEN, use_context=True)
     dispatcher = updater.dispatcher
 
     # Command handlers
