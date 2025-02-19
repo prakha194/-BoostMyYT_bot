@@ -1,3 +1,5 @@
-python-telegram-bot
+python-telegram-bot==20.0
 google-api-python-client
 openai
+sqlite3
+python-dotenv  # <== This is missing, but needed for .env support
