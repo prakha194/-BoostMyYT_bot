@@ -1,6 +1,5 @@
 python-telegram-bot
 google-api-python-client
 google-generativeai
-sqlite3
 schedule
 python-dotenv
