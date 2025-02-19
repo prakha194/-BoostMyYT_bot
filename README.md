@@ -12,3 +12,4 @@ A private Telegram bot to automate YouTube promotion and provide analytics.
 1. Install dependencies:
    ```bash
    pip install -r requirements.txt
+
