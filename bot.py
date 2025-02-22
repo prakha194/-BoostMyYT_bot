@@ -1,9 +1,9 @@
 import logging
 import requests
 import sqlite3
+import asyncio
 import google.generativeai as genai
 from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from config import *
 
@@ -25,7 +25,7 @@ cursor.execute("""
 """)
 conn.commit()
 
-# Fetch comments from latest video
+# Fetch comments from the latest video
 def fetch_latest_video_comments():
     url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={YOUTUBE_CHANNEL_ID}&maxResults=1&order=date&type=video&key={YOUTUBE_API_KEY}"
     response = requests.get(url).json()
@@ -47,8 +47,15 @@ def fetch_latest_video_comments():
 # Generate AI Response using Gemini
 def generate_ai_reply(comment_text):
     model = genai.GenerativeModel("gemini-pro")
-    response = model.generate_content(f"Reply to this YouTube comment: {comment_text}")
-    return response.text if response.text else "Thank you for your comment! 😊"
+    
+    try:
+        response = model.generate_content(f"Reply to this YouTube comment: {comment_text}")
+        if response and response.candidates:
+            return response.candidates[0].content.parts[0].text
+    except Exception as e:
+        logging.error(f"Gemini API Error: {e}")
+    
+    return "Thank you for your comment! 😊"
 
 # Send AI-generated comment to Telegram
 async def send_to_telegram(video_id, comment_text, ai_reply):
@@ -57,7 +64,7 @@ async def send_to_telegram(video_id, comment_text, ai_reply):
     message += f"💬 **Comment:** {comment_text}\n"
     message += f"🤖 **AI Reply:** {ai_reply}"
     
-    await bot.send_message(chat_id="@your_channel_or_group", text=message, parse_mode="Markdown")
+    await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode="Markdown")
 
 # Auto-comment function
 async def auto_comment():
@@ -73,8 +80,11 @@ async def auto_comment():
 
 # Schedule auto-commenting every 30 minutes
 scheduler.add_job(auto_comment, "interval", minutes=30)
-scheduler.start()
 
-# Start bot
+# Main function to start bot properly
+async def main():
+    scheduler.start()
+    await dp.start_polling()
+
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())
