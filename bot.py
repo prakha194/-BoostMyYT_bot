@@ -5,7 +5,7 @@ import asyncio
 import google.generativeai as genai
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message
-from aiogram.utils import executor
+from aiogram import executor
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import os
 import random
