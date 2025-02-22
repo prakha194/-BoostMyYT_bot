@@ -6,33 +6,30 @@ import google.generativeai as genai
 from aiogram import Bot, Dispatcher, types
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import os
+import random
+from fastapi import FastAPI
+import uvicorn
 
-# Load Environment Variables
+# Load API keys
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")
+TELEGRAM_ADMIN_ID = os.getenv("TELEGRAM_ADMIN_ID")
 
-# Debugging
-print("TELEGRAM_BOT_TOKEN:", TELEGRAM_BOT_TOKEN)
-print("GEMINI_API_KEY:", GEMINI_API_KEY)
-print("YOUTUBE_API_KEY:", YOUTUBE_API_KEY)
-print("YOUTUBE_CHANNEL_ID:", YOUTUBE_CHANNEL_ID)
-print("TELEGRAM_CHAT_ID:", TELEGRAM_CHAT_ID)
+# Initialize FastAPI App
+app = FastAPI()
 
 # Initialize Telegram Bot
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
-dp = Dispatcher()  # Fix here
-dp["bot"] = bot  # Attach bot
-
+dp = Dispatcher(bot)
 scheduler = AsyncIOScheduler()
 
 # Gemini AI Setup
-genai.configure(api_key=GEMINI_API_KEY)
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 # Database Setup
-conn = sqlite3.connect("youtube_comments.db")
+conn = sqlite3.connect("youtube_data.db")
 cursor = conn.cursor()
 cursor.execute("""
     CREATE TABLE IF NOT EXISTS replied_comments (
@@ -41,67 +38,46 @@ cursor.execute("""
 """)
 conn.commit()
 
-# Fetch comments from the latest video
-def fetch_latest_video_comments():
-    url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={YOUTUBE_CHANNEL_ID}&maxResults=1&order=date&type=video&key={YOUTUBE_API_KEY}"
+# Function to fetch latest videos
+def fetch_latest_videos():
+    url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={YOUTUBE_CHANNEL_ID}&maxResults=5&order=date&type=video&key={YOUTUBE_API_KEY}"
     response = requests.get(url).json()
+    return [(item["id"]["videoId"], item["snippet"]["title"]) for item in response.get("items", [])]
 
-    if "items" in response:
-        video_id = response["items"][0]["id"]["videoId"]
-        comments_url = f"https://www.googleapis.com/youtube/v3/commentThreads?part=snippet&videoId={video_id}&key={YOUTUBE_API_KEY}&maxResults=20"
-        comments_response = requests.get(comments_url).json()
+# Function to send new videos to group
+async def send_new_videos():
+    videos = fetch_latest_videos()
+    for video_id, title in videos:
+        message = f"📢 **New Video Uploaded!**\n🎬 *{title}*\n🔗 https://www.youtube.com/watch?v={video_id}"
+        await bot.send_message(chat_id=TELEGRAM_GROUP_ID, text=message, parse_mode="Markdown")
 
-        comments = []
-        if "items" in comments_response:
-            for item in comments_response["items"]:
-                comment_id = item["id"]
-                comment_text = item["snippet"]["topLevelComment"]["snippet"]["textDisplay"]
-                comments.append((video_id, comment_id, comment_text))
-        return comments
-    return []
+# Function to send weekly stats
+async def send_weekly_stats():
+    videos = fetch_latest_videos()
+    if not videos:
+        return
 
-# Generate AI Response using Gemini
-def generate_ai_reply(comment_text):
-    model = genai.GenerativeModel("gemini-pro")
+    stats_message = "📊 **Weekly YouTube Stats**\n\n"
+    for video_id, title in videos:
+        stats_message += f"🎬 *{title}*\n🔗 [Watch Now](https://www.youtube.com/watch?v={video_id})\n\n"
 
-    try:
-        response = model.generate_content(f"Reply to this YouTube comment: {comment_text}")
-        if response and response.candidates:
-            return response.candidates[0].content.parts[0].text
-    except Exception as e:
-        logging.error(f"Gemini API Error: {e}")
+    await bot.send_message(chat_id=TELEGRAM_ADMIN_ID, text=stats_message, parse_mode="Markdown")
 
-    return "Thank you for your comment! 😊"
+# Schedule tasks
+scheduler.add_job(send_new_videos, "interval", hours=1)
+scheduler.add_job(send_weekly_stats, "cron", day_of_week="sun", hour=1)
 
-# Send AI-generated comment to Telegram
-async def send_to_telegram(video_id, comment_text, ai_reply):
-    message = f"📢 **New Comment Detected**\n\n"
-    message += f"🎬 **Video ID:** `{video_id}`\n"
-    message += f"💬 **Comment:** {comment_text}\n"
-    message += f"🤖 **AI Reply:** {ai_reply}"
+# API Route for Health Check
+@app.get("/")
+async def root():
+    return {"message": "Telegram Bot is Running!"}
 
-    await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode="Markdown")
-
-# Auto-comment function
-async def auto_comment():
-    comments = fetch_latest_video_comments()
-    for video_id, comment_id, text in comments:
-        cursor.execute("SELECT * FROM replied_comments WHERE comment_id=?", (comment_id,))
-        if not cursor.fetchone():
-            ai_reply = generate_ai_reply(text)
-            await send_to_telegram(video_id, text, ai_reply)
-            cursor.execute("INSERT INTO replied_comments VALUES (?)", (comment_id,))
-            conn.commit()
-            logging.info(f"Sent AI reply to Telegram: {text}")
-
-# Schedule auto-commenting every 30 minutes
-scheduler.add_job(auto_comment, "interval", minutes=30)
-
-# Main function to start bot properly
-async def main():
+# Start Telegram Bot and Scheduler
+@app.on_event("startup")
+async def start_bot():
     scheduler.start()
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)  # Fixed for Aiogram v3
+    asyncio.create_task(dp.start_polling())
 
+# Run FastAPI Server
 if __name__ == "__main__":
-    asyncio.run(main())
+    uvicorn.run(app, host="0.0.0.0", port=8000)
