@@ -1,15 +1,18 @@
-# BoostMyYT_bot
-
-A private Telegram bot to automate YouTube promotion and provide analytics.
+# YouTube Auto Promotion Bot (Telegram + Gemini AI)
 
 ## Features
-- Auto-share latest YouTube videos in a Telegram group.
-- Boost views: 10 to the newest video and 10 to older videos every week.
-- Advanced commenting using Gemini.
-- Analytics report of bot actions.
+✅ Fetches new YouTube comments automatically.  
+✅ Uses Gemini AI to generate smart replies.  
+✅ Sends AI replies to a Telegram group/channel.  
+✅ Runs 24/7 on Render.  
 
-## Setup
-1. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-
+## How to Deploy on Render
+1. **Fork this repository** to your GitHub.  
+2. **Go to Render.com → Create a New Web Service**.  
+3. **Connect GitHub Repo & Select `bot.py` as the start command**.  
+4. **Add Environment Variables in Render**:  
+   - `TELEGRAM_BOT_TOKEN`
+   - `YOUTUBE_API_KEY`
+   - `YOUTUBE_CHANNEL_ID`
+   - `GEMINI_API_KEY`  
+5. **Deploy & Run!** 🎉
