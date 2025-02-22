@@ -5,7 +5,9 @@ import asyncio
 import google.generativeai as genai
 from aiogram import Bot, Dispatcher, types
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from config import *
+import os
+
+API_KEY = os.getenv("API_KEY")  # Replace with your actual variable name
 
 # Initialize Telegram Bot
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
