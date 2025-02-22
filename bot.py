@@ -10,7 +10,9 @@ import os
 API_KEY = os.getenv("API_KEY")  # Replace with your actual variable name
 
 # Initialize Telegram Bot
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
+import os
+
+bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
 dp = Dispatcher(bot)
 scheduler = AsyncIOScheduler()
 
