@@ -2,23 +2,30 @@ import logging
 import requests
 import sqlite3
 import asyncio
-import random
+import google.generativeai as genai
 from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import os
+import random
+from fastapi import FastAPI
+import uvicorn
 
-# Load API keys from environment variables
+# Load API keys
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID")
 TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")
 TELEGRAM_ADMIN_ID = os.getenv("TELEGRAM_ADMIN_ID")
 
-# Initialize Telegram Bot & Dispatcher
+# Initialize FastAPI App
+app = FastAPI()
+
+# Initialize Telegram Bot
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
-dp = Dispatcher(bot)
-scheduler = AsyncIOScheduler()
+dp = Dispatcher()
+
+# Gemini AI Setup
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 # Database Setup
 conn = sqlite3.connect("youtube_data.db")
@@ -56,14 +63,21 @@ async def send_weekly_stats():
     await bot.send_message(chat_id=TELEGRAM_ADMIN_ID, text=stats_message, parse_mode="Markdown")
 
 # Schedule tasks
-scheduler.add_job(lambda: asyncio.create_task(send_new_videos()), "interval", hours=1)
-scheduler.add_job(lambda: asyncio.create_task(send_weekly_stats()), "cron", day_of_week="sun", hour=1)
+scheduler = AsyncIOScheduler()
+scheduler.add_job(send_new_videos, "interval", hours=1)
+scheduler.add_job(send_weekly_stats, "cron", day_of_week="sun", hour=1)
 
-# Start Bot & Scheduler
-async def on_startup(_):
+# API Route for Health Check
+@app.get("/")
+async def root():
+    return {"message": "Telegram Bot is Running!"}
+
+# Function to start bot properly
+async def main():
     scheduler.start()
-    print("Bot & Scheduler Started")
+    await dp.start_polling(bot)
 
+# Run FastAPI Server and Telegram Bot
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+    asyncio.run(main())
