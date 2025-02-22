@@ -1,103 +1,80 @@
-import os
-import time
-import schedule
-from telegram import Bot, Update
-from telegram.ext import Application, CommandHandler
-from googleapiclient.discovery import build
+import logging
+import requests
+import sqlite3
+import google.generativeai as genai
+from aiogram import Bot, Dispatcher, types
+from aiogram.utils import executor
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from config import *
 
-# Load environment variables
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
-TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")
-YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID")
-YOUR_CHAT_ID = os.getenv("YOUR_CHAT_ID")  # Your private chat ID with the bot
-
-# Initialize APIs
+# Initialize Telegram Bot
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
-youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
+dp = Dispatcher(bot)
+scheduler = AsyncIOScheduler()
 
-def fetch_latest_videos():
-    """Fetch latest videos from your YouTube channel."""
-    request = youtube.search().list(
-        part="snippet",
-        channelId=YOUTUBE_CHANNEL_ID,
-        maxResults=10,
-        order="date"
+# Gemini AI Setup
+genai.configure(api_key=GEMINI_API_KEY)
+
+# Database Setup
+conn = sqlite3.connect("youtube_comments.db")
+cursor = conn.cursor()
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS replied_comments (
+        comment_id TEXT PRIMARY KEY
     )
-    return request.execute().get("items", [])
+""")
+conn.commit()
 
-def send_task_update(message):
-    """Send a task update to your private chat with the bot."""
-    bot.send_message(chat_id=YOUR_CHAT_ID, text=message)
+# Fetch comments from latest video
+def fetch_latest_video_comments():
+    url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={YOUTUBE_CHANNEL_ID}&maxResults=1&order=date&type=video&key={YOUTUBE_API_KEY}"
+    response = requests.get(url).json()
+    
+    if "items" in response:
+        video_id = response["items"][0]["id"]["videoId"]
+        comments_url = f"https://www.googleapis.com/youtube/v3/commentThreads?part=snippet&videoId={video_id}&key={YOUTUBE_API_KEY}&maxResults=20"
+        comments_response = requests.get(comments_url).json()
+        
+        comments = []
+        if "items" in comments_response:
+            for item in comments_response["items"]:
+                comment_id = item["id"]
+                comment_text = item["snippet"]["topLevelComment"]["snippet"]["textDisplay"]
+                comments.append((video_id, comment_id, comment_text))
+        return comments
+    return []
 
-def boost_views(video_id, views):
-    """Simulate adding views to a video."""
-    print(f"Added {views} views to video: {video_id}")
-    send_task_update(f"✅ Added {views} views to video: {video_id}")
+# Generate AI Response using Gemini
+def generate_ai_reply(comment_text):
+    model = genai.GenerativeModel("gemini-pro")
+    response = model.generate_content(f"Reply to this YouTube comment: {comment_text}")
+    return response.text if response.text else "Thank you for your comment! 😊"
 
-def share_video(video):
-    """Share a video in the Telegram group."""
-    video_id = video["id"]["videoId"]
-    video_title = video["snippet"]["title"]
-    video_url = f"https://youtube.com/watch?v={video_id}"
-    bot.send_message(chat_id=TELEGRAM_GROUP_ID, text=f"🎥 New video: {video_title}\n{video_url}")
-    send_task_update(f"✅ Shared video: {video_title}\nLink: {video_url}")
+# Send AI-generated comment to Telegram
+async def send_to_telegram(video_id, comment_text, ai_reply):
+    message = f"📢 **New Comment Detected**\n\n"
+    message += f"🎬 **Video ID:** `{video_id}`\n"
+    message += f"💬 **Comment:** {comment_text}\n"
+    message += f"🤖 **AI Reply:** {ai_reply}"
+    
+    await bot.send_message(chat_id="@your_channel_or_group", text=message, parse_mode="Markdown")
 
-def weekly_views_boosting():
-    """Boost views for the latest and older videos."""
-    videos = fetch_latest_videos()
-    if not videos:
-        return
+# Auto-comment function
+async def auto_comment():
+    comments = fetch_latest_video_comments()
+    for video_id, comment_id, text in comments:
+        cursor.execute("SELECT * FROM replied_comments WHERE comment_id=?", (comment_id,))
+        if not cursor.fetchone():
+            ai_reply = generate_ai_reply(text)
+            await send_to_telegram(video_id, text, ai_reply)
+            cursor.execute("INSERT INTO replied_comments VALUES (?)", (comment_id,))
+            conn.commit()
+            logging.info(f"Sent AI reply to Telegram: {text}")
 
-    # Boost 10 views to the newest video
-    newest_video = videos[0]
-    boost_views(newest_video["id"]["videoId"], 10)
+# Schedule auto-commenting every 30 minutes
+scheduler.add_job(auto_comment, "interval", minutes=30)
+scheduler.start()
 
-    # Boost 10 views to older videos
-    for video in videos[1:6]:  # Distribute across 5 older videos
-        boost_views(video["id"]["videoId"], 2)  # 2 views per video
-
-def send_analytics(update: Update, context):
-    """Send analytics report to the user."""
-    update.message.reply_text("Analytics are not available without SQLite.")
-
-def start(update: Update, context):
-    """Start command handler."""
-    update.message.reply_text(
-        "Welcome to BoostMyYT_bot! 🚀\n"
-        "Use the following commands:\n"
-        "- /report: Get analytics.\n"
-        "- /help: Show this help message."
-    )
-
-def help_command(update: Update, context):
-    """Help command handler."""
-    update.message.reply_text(
-        "🤖 BoostMyYT_bot Help:\n"
-        "- /start: Start the bot.\n"
-        "- /report: Get analytics.\n"
-        "- /help: Show this help message."
-    )
-
-def main():
-    """Start the bot."""
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    dispatcher = app.dispatcher
-
-    # Command handlers
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(CommandHandler("report", send_analytics))
-    dispatcher.add_handler(CommandHandler("help", help_command))
-
-    # Schedule weekly views boosting
-    schedule.every().week.do(weekly_views_boosting)
-
-    app.run_polling()
-
-    # Keep the bot running
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
-
+# Start bot
 if __name__ == "__main__":
-    main()
+    executor.start_polling(dp, skip_updates=True)
