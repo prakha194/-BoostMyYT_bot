@@ -17,12 +17,16 @@ YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID")
 TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")
 TELEGRAM_ADMIN_ID = os.getenv("TELEGRAM_ADMIN_ID")
 
+# Check if tokens are loaded
+if not TELEGRAM_BOT_TOKEN:
+    raise ValueError("TELEGRAM_BOT_TOKEN is missing!")
+
 # Initialize FastAPI App
 app = FastAPI()
 
 # Initialize Telegram Bot
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher()  # ✅ Fix: No bot instance required in Aiogram v3
 scheduler = AsyncIOScheduler()
 
 # Gemini AI Setup
@@ -76,7 +80,7 @@ async def root():
 @app.on_event("startup")
 async def start_bot():
     scheduler.start()
-    asyncio.create_task(dp.start_polling())
+    asyncio.create_task(dp.start_polling(bot))  # ✅ Fix: Aiogram v3 requires bot here
 
 # Run FastAPI Server
 if __name__ == "__main__":
