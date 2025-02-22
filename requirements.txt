@@ -1,8 +1,7 @@
-fastapi
-uvicorn
 aiogram
 apscheduler
-requests
-python-dotenv
+fastapi
 google-generativeai
-gunicorn
+requests
+sqlite3
+uvicorn
