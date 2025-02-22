@@ -3,5 +3,4 @@ apscheduler
 fastapi
 google-generativeai
 requests
-sqlite3
 uvicorn
