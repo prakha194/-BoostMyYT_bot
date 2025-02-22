@@ -2,4 +2,3 @@ aiogram
 requests
 google-generativeai
 apscheduler
-sqlite3
