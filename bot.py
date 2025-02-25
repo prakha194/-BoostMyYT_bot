@@ -1,118 +1,129 @@
 import logging
-import requests
-import sqlite3
-import asyncio
-import google.generativeai as genai
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import Message
-from aiogram import executor
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-import os
-import random
-from fastapi import FastAPI
-import uvicorn
+from telegram import Update, ChatMember
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    CallbackContext,
+    CallbackQueryHandler,
+)
+import openai  # For ChatGPT API
+import google.generativeai as genai  # For Gemini API
+import os  # For environment variables
 
-# Load API keys
+# Load environment variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
-YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID")
-TELEGRAM_GROUP_ID = int(os.getenv("TELEGRAM_GROUP_ID"))
-TELEGRAM_ADMIN_ID = int(os.getenv("TELEGRAM_ADMIN_ID"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+CHANNEL_USERNAME = "@premiumlinkers"  # Your channel username
 
-# Initialize FastAPI App
-app = FastAPI()
+# Initialize APIs
+openai.api_key = OPENAI_API_KEY
+genai.configure(api_key=GEMINI_API_KEY)  # Initialize Gemini API
 
-# Initialize Telegram Bot
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
-dp = Dispatcher(bot)
+# Logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 
-# Gemini AI Setup
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+# Store user preferences and membership status
+user_data = {}
 
-# Database Setup
-conn = sqlite3.connect("youtube_data.db")
-cursor = conn.cursor()
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS replied_comments (
-        comment_id TEXT PRIMARY KEY
-    )
-""")
-conn.commit()
+# Check if user is a member of the channel
+async def is_member(user_id: int, context: CallbackContext) -> bool:
+    try:
+        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        return member.status in [ChatMember.MEMBER, ChatMember.ADMINISTRATOR, ChatMember.OWNER]
+    except Exception as e:
+        logging.error(f"Error checking membership: {e}")
+        return False
 
-# Function to fetch latest videos
-def fetch_latest_videos():
-    url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={YOUTUBE_CHANNEL_ID}&maxResults=5&order=date&type=video&key={YOUTUBE_API_KEY}"
-    response = requests.get(url).json()
-    return [(item["id"]["videoId"], item["snippet"]["title"]) for item in response.get("items", [])]
-
-# Function to fetch old videos
-def fetch_old_videos():
-    url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={YOUTUBE_CHANNEL_ID}&maxResults=10&order=viewCount&type=video&key={YOUTUBE_API_KEY}"
-    response = requests.get(url).json()
-    return [(item["id"]["videoId"], item["snippet"]["title"]) for item in response.get("items", [])]
-
-# Function to send new videos to group
-async def send_new_videos():
-    videos = fetch_latest_videos()
-    for video_id, title in videos:
-        message = f"📢 **New Video Uploaded!**\n🎬 *{title}*\n🔗 https://www.youtube.com/watch?v={video_id}"
-        await bot.send_message(chat_id=TELEGRAM_GROUP_ID, text=message, parse_mode="Markdown")
-
-# Function to distribute 20 views per week
-async def distribute_views():
-    new_videos = fetch_latest_videos()
-    old_videos = fetch_old_videos()
-
-    if new_videos:
-        selected_new = random.sample(new_videos, min(10, len(new_videos)))
-        selected_old = random.sample(old_videos, min(10, len(old_videos)))
+# Start command
+async def start(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    if await is_member(user_id, context):
+        await update.message.reply_text("Welcome! You can start using the bot.")
     else:
-        selected_new = []
-        selected_old = random.sample(old_videos, min(20, len(old_videos)))
+        await update.message.reply_text(f"Please join {CHANNEL_USERNAME} to use this bot.")
 
-    all_selected = selected_new + selected_old
-
-    for video_id, title in all_selected:
-        message = f"👀 Boosting Views: {title}\n🔗 https://www.youtube.com/watch?v={video_id}"
-        await bot.send_message(chat_id=TELEGRAM_GROUP_ID, text=message, parse_mode="Markdown")
-
-# Function to send weekly stats to admin
-async def send_weekly_stats():
-    videos = fetch_latest_videos()
-    if not videos:
+# Choose AI command
+async def choose_ai(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    if not await is_member(user_id, context):
+        await update.message.reply_text(f"Please join {CHANNEL_USERNAME} to use this bot.")
         return
 
-    stats_message = "📊 **Weekly YouTube Stats**\n\n"
-    for video_id, title in videos:
-        stats_message += f"🎬 *{title}*\n🔗 [Watch Now](https://www.youtube.com/watch?v={video_id})\n\n"
+    keyboard = [
+        [InlineKeyboardButton("ChatGPT", callback_data="chatgpt")],
+        [InlineKeyboardButton("Gemini", callback_data="gemini")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Choose an AI:", reply_markup=reply_markup)
 
-    await bot.send_message(chat_id=TELEGRAM_ADMIN_ID, text=stats_message, parse_mode="Markdown")
+# Handle AI selection
+async def handle_ai_selection(update: Update, context: CallbackContext):
+    query = update.callback_query
+    user_id = query.from_user.id
+    ai_choice = query.data
 
-# Report command to send stats to admin anytime
-@dp.message_handler(commands=["report"])
-async def report_command(message: Message):
-    if message.from_user.id == TELEGRAM_ADMIN_ID:
-        await send_weekly_stats()
-        await message.reply("📊 Weekly stats sent to your DM!")
+    user_data[user_id] = {"ai": ai_choice}
+    await query.edit_message_text(f"You have selected {ai_choice.capitalize()}.")
 
-# Schedule tasks
-scheduler = AsyncIOScheduler()
-scheduler.add_job(send_new_videos, "interval", hours=1)
-scheduler.add_job(distribute_views, "cron", day_of_week="mon", hour=12)  # Weekly view boost
-scheduler.add_job(send_weekly_stats, "cron", day_of_week="sun", hour=1)
+# Handle messages
+async def handle_message(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
 
-# API Route for Health Check (fixes 405 error)
-@app.get("/")
-async def root():
-    return {"message": "Telegram Bot is Running!"}
+    # Check channel membership
+    if not await is_member(user_id, context):
+        await update.message.reply_text(f"Please join {CHANNEL_USERNAME} to use this bot.")
+        return
 
-# Function to start bot properly
-async def start_bot():
-    scheduler.start()
-    await dp.start_polling()
+    # Check if AI is selected
+    if user_id not in user_data or "ai" not in user_data[user_id]:
+        await update.message.reply_text("Please choose an AI using /chooseai.")
+        return
 
-# Run FastAPI Server and Telegram Bot
+    user_input = update.message.text
+    ai_choice = user_data[user_id]["ai"]
+
+    if ai_choice == "chatgpt":
+        # Call ChatGPT API
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": user_input}]
+        )
+        reply = response['choices'][0]['message']['content']
+    elif ai_choice == "gemini":
+        # Call Gemini API
+        model = genai.GenerativeModel('gemini-pro')
+        response = model.generate_content(user_input)
+        reply = response.text
+
+    await update.message.reply_text(reply)
+
+# Set group command
+async def set_group(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    group_name = " ".join(context.args)
+
+    if not group_name:
+        await update.message.reply_text("Please provide a group name. Usage: /setgroup <group_name>")
+        return
+
+    # Add logic to make the bot an admin in the group
+    await update.message.reply_text(f"Group '{group_name}' set. Please make the bot an admin in the group.")
+
+# Main function
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.create_task(start_bot())
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # Handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("chooseai", choose_ai))
+    application.add_handler(CallbackQueryHandler(handle_ai_selection))
+    application.add_handler(CommandHandler("setgroup", set_group))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Run the bot
+    application.run_polling()
