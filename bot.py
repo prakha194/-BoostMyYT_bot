@@ -1,5 +1,5 @@
 import logging
-from telegram import Update, ChatMember
+from telegram import Update, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -96,9 +96,13 @@ async def handle_message(update: Update, context: CallbackContext):
         reply = response['choices'][0]['message']['content']
     elif ai_choice == "gemini":
         # Call Gemini API
-        model = genai.GenerativeModel('gemini-pro')
-        response = model.generate_content(user_input)
-        reply = response.text
+        try:
+            model = genai.GenerativeModel('gemini-pro')
+            response = model.generate_content(user_input)
+            reply = response.text
+        except Exception as e:
+            logging.error(f"Gemini API error: {e}")
+            reply = "Sorry, I couldn't generate a response. Please try again."
 
     await update.message.reply_text(reply)
 
