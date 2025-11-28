@@ -46,13 +46,16 @@ def search_youtube_real(query):
         print(f"Search error: {e}")
         return []
 
-# ==================== DOWNLOAD AUDIO FILE ====================
+# ==================== DOWNLOAD AND SEND AUDIO ====================
 def download_and_send_audio(video_url, chat_id, message_id=None):
     """Download and send audio file directly"""
     try:
         if message_id:
             bot.edit_message_text("🎵 Downloading music...", chat_id, message_id)
-        
+        else:
+            loading_msg = bot.send_message(chat_id, "🎵 Downloading music...")
+            message_id = loading_msg.message_id
+
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': 'downloads/%(title)s.%(ext)s',
@@ -69,39 +72,37 @@ def download_and_send_audio(video_url, chat_id, message_id=None):
             media_file = original_file.rsplit('.', 1)[0] + '.mp3'
             
             if os.path.exists(media_file):
-                # Send audio file
+                # Send the audio file as native Telegram audio
                 with open(media_file, 'rb') as media:
                     bot.send_audio(
                         chat_id, 
                         media, 
                         title=info['title'][:64],
-                        performer=info.get('uploader', 'Unknown Artist')
+                        performer=info.get('uploader', 'Unknown Artist'),
+                        duration=info.get('duration', 0)
                     )
                 
-                # Send YouTube link
+                # Send YouTube link separately
                 bot.send_message(chat_id, f"🔗 YouTube Link:\n{video_url}")
                 
-                # Cleanup
+                # Cleanup files
                 os.remove(media_file)
                 if os.path.exists(original_file):
                     os.remove(original_file)
                 
-                if message_id:
-                    bot.delete_message(chat_id, message_id)
-                    
+                # Delete loading message
+                bot.delete_message(chat_id, message_id)
+                
             else:
-                if message_id:
-                    bot.edit_message_text("❌ Failed to download", chat_id, message_id)
+                bot.edit_message_text("❌ Failed to download audio", chat_id, message_id)
                 
     except Exception as e:
         error_msg = str(e)
-        if message_id:
-            if "Sign in to confirm" in error_msg:
-                bot.edit_message_text("🔒 YouTube blocked download", chat_id, message_id)
-            else:
-                bot.edit_message_text("❌ Download failed", chat_id, message_id)
+        print(f"Download error: {error_msg}")
+        if "Sign in to confirm" in error_msg:
+            bot.edit_message_text("🔒 YouTube is blocking downloads. Try again later.", chat_id, message_id)
         else:
-            bot.send_message(chat_id, "❌ Download failed")
+            bot.edit_message_text("❌ Download failed. Try a different video.", chat_id, message_id)
 
 # ==================== BOT COMMANDS ====================
 @bot.message_handler(commands=['start'])
@@ -119,9 +120,8 @@ def start_command(message):
 /switch - Choose music or video mode
 
 *Features:*
-• Search and download music as MP3
-• Get video links instantly
-• Fast and simple
+• Music: Download MP3 files + YouTube links
+• Video: Get YouTube links instantly
 """
     
     bot.reply_to(message, welcome_text, parse_mode='Markdown')
@@ -142,7 +142,7 @@ def switch_command(message):
     btn_video = types.InlineKeyboardButton("🎬 Video", callback_data="switch_video")
     markup.add(btn_music, btn_video)
     
-    response = "🎛️ *Choose Mode:*\n\n• 🎵 Music - Download MP3 files\n• 🎬 Video - Get video links"
+    response = "🎛️ *Choose Mode:*\n\n• 🎵 Music - Get MP3 files + links\n• 🎬 Video - Get video links"
     bot.reply_to(message, response, reply_markup=markup, parse_mode='Markdown')
     
     if str(user_id) != ADMIN_USER_ID:
@@ -169,13 +169,13 @@ def handle_callbacks(call):
         user_sessions[user_id] = {'mode': mode}
         
         if mode == 'music':
-            response = "🎵 *Music Mode*\n\nSend me a song name or artist. I'll download the MP3 file and send it directly."
+            response = "🎵 *Music Mode*\n\nSend me a song name or artist. I'll send the MP3 file and YouTube link."
         else:
             response = "🎬 *Video Mode*\n\nSend me a video title. I'll send you the YouTube link."
         
         bot.edit_message_text(response, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
     
-    # MUSIC SELECTION - DOWNLOAD AND SEND FILE
+    # MUSIC SELECTION - DOWNLOAD AND SEND AUDIO FILE + LINK
     elif call.data.startswith('music_'):
         video_url = call.data.split('_', 1)[1]
         bot.edit_message_text("🎵 Downloading music file...", call.message.chat.id, call.message.message_id)
@@ -192,9 +192,10 @@ def handle_callbacks(call):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(video_url, download=False)
             
-            caption = f"🎬 *{info['title']}*\n*Channel:* {info.get('uploader', 'Unknown')}\n*Duration:* {info.get('duration', 0)} seconds\n\n🔗 *YouTube Link:*\n{video_url}"
+            caption = f"🎬 *{info['title']}*\n*Channel:* {info.get('uploader', 'Unknown')}\n\n🔗 *YouTube Link:*\n{video_url}"
             bot.edit_message_text(caption, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
         except:
+            # Fallback if can't get video info
             bot.edit_message_text(f"🔗 *YouTube Video Link:*\n{video_url}", call.message.chat.id, call.message.message_id, parse_mode='Markdown')
 
 # ==================== MESSAGE HANDLERS ====================
@@ -241,7 +242,7 @@ def handle_all_messages(message):
                     response += f"{i}. *{title}*\n   👉 {result['channel']}\n\n"
                     
                     if mode == 'music':
-                        btn = types.InlineKeyboardButton(f"🎵 Download {i}", callback_data=f"music_{result['url']}")
+                        btn = types.InlineKeyboardButton(f"🎵 Get MP3 {i}", callback_data=f"music_{result['url']}")
                     else:
                         btn = types.InlineKeyboardButton(f"🎬 Get Link {i}", callback_data=f"video_{result['url']}")
                     markup.add(btn)
@@ -260,7 +261,7 @@ def handle_all_messages(message):
 # ==================== FLASK APP ====================
 @app.route('/')
 def home():
-    return "YouTube Manager Bot - Simple Music & Video"
+    return "YouTube Manager Bot - Music & Video Links"
 
 def run_bot():
     print("🤖 Starting YouTube Manager Bot...")
