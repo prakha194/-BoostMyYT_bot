@@ -96,47 +96,23 @@ def get_video_info(video_url):
     except:
         return None
 
-# ==================== MUSIC HANDLING ====================
-def send_music_options(video_url, chat_id, message_id=None):
-    """Send music options with player controls"""
+# ==================== FORMAT DURATION ====================
+def format_duration(seconds):
+    """Convert seconds to MM:SS or HH:MM:SS format"""
     try:
-        info = get_video_info(video_url)
-        if not info:
-            bot.send_message(chat_id, "❌ Could not get video info")
-            return
-
-        # Create music player interface
-        caption = f"🎵 *{info['title']}*\n*Artist:* {info.get('uploader', 'Unknown')}\n*Duration:* {info.get('duration', 0)}s"
-
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        
-        # Music player controls
-        btn_play = types.InlineKeyboardButton("▶️ Play", callback_data=f"music_play_{video_url}")
-        btn_pause = types.InlineKeyboardButton("⏸️ Pause", callback_data=f"music_pause_{video_url}")
-        btn_stop = types.InlineKeyboardButton("⏹️ Stop", callback_data=f"music_stop_{video_url}")
-        btn_next = types.InlineKeyboardButton("⏭️ Next", callback_data=f"music_next_{video_url}")
-        
-        # File options
-        btn_file = types.InlineKeyboardButton("📁 Send File", callback_data=f"music_file_{video_url}")
-        btn_download = types.InlineKeyboardButton("📥 Download", callback_data=f"music_download_{video_url}")
-        btn_watch = types.InlineKeyboardButton("🌐 Watch Video", url=video_url)
-        
-        markup.add(btn_play, btn_pause, btn_stop, btn_next)
-        markup.add(btn_file, btn_download)
-        markup.add(btn_watch)
-
-        if message_id:
-            bot.edit_message_text(caption, chat_id, message_id, reply_markup=markup, parse_mode='Markdown')
+        seconds = int(seconds)
+        if seconds < 3600:
+            return time.strftime('%M:%S', time.gmtime(seconds))
         else:
-            bot.send_message(chat_id, caption, reply_markup=markup, parse_mode='Markdown')
-            
-    except Exception as e:
-        bot.send_message(chat_id, f"❌ Error: {str(e)[:100]}")
+            return time.strftime('%H:%M:%S', time.gmtime(seconds))
+    except:
+        return "0:00"
 
-def send_music_file(video_url, chat_id, message_id=None):
-    """Send music as direct file"""
+# ==================== MUSIC HANDLING ====================
+def send_music_as_audio(video_url, chat_id, message_id=None):
+    """Send music as audio file with player interface like in the image"""
     try:
-        progress_msg = bot.send_message(chat_id, "🎵 Preparing your music file...")
+        progress_msg = bot.send_message(chat_id, "🎵 Preparing your music...")
         
         ydl_opts = {
             'format': 'bestaudio/best',
@@ -154,10 +130,48 @@ def send_music_file(video_url, chat_id, message_id=None):
             media_file = original_file.rsplit('.', 1)[0] + '.mp3'
             
             if os.path.exists(media_file):
-                with open(media_file, 'rb') as media:
-                    bot.send_audio(chat_id, media, title=info['title'][:64])
+                # Get duration in proper format
+                duration = info.get('duration', 0)
+                formatted_duration = format_duration(duration)
                 
-                # Cleanup
+                # Create caption like in the image
+                caption = f"🎵 *{info['title']}*\n👤 *Artist:* {info.get('uploader', 'Unknown')}"
+                
+                # Send audio file with inline keyboard
+                with open(media_file, 'rb') as audio_file:
+                    # Create player controls like in the image
+                    markup = types.InlineKeyboardMarkup(row_width=5)
+                    
+                    # Player controls - exactly like the reference image
+                    btn_rewind = types.InlineKeyboardButton("⏪", callback_data=f"music_rewind_{video_url}")
+                    btn_prev = types.InlineKeyboardButton("⏮️", callback_data=f"music_prev_{video_url}")
+                    btn_play = types.InlineKeyboardButton("▶️", callback_data=f"music_play_{video_url}")
+                    btn_next = types.InlineKeyboardButton("⏭️", callback_data=f"music_next_{video_url}")
+                    btn_forward = types.InlineKeyboardButton("⏩", callback_data=f"music_forward_{video_url}")
+                    
+                    # Additional options
+                    btn_lyrics = types.InlineKeyboardButton("📝 Lyrics", callback_data=f"music_lyrics_{video_url}")
+                    btn_download = types.InlineKeyboardButton("📥 Download", callback_data=f"music_download_{video_url}")
+                    btn_watch = types.InlineKeyboardButton("🌐 Watch Video", url=video_url)
+                    
+                    # Add controls in rows
+                    markup.add(btn_rewind, btn_prev, btn_play, btn_next, btn_forward)
+                    markup.add(btn_lyrics, btn_download)
+                    markup.add(btn_watch)
+                    
+                    # Send audio with caption and controls
+                    bot.send_audio(
+                        chat_id=chat_id,
+                        audio=audio_file,
+                        title=info['title'][:64],
+                        performer=info.get('uploader', 'Unknown')[:64],
+                        duration=int(duration),
+                        caption=caption,
+                        reply_markup=markup,
+                        parse_mode='Markdown'
+                    )
+                
+                # Cleanup files
                 os.remove(media_file)
                 if os.path.exists(original_file):
                     os.remove(original_file)
@@ -169,12 +183,12 @@ def send_music_file(video_url, chat_id, message_id=None):
     except Exception as e:
         error_msg = str(e)
         if "Sign in to confirm" in error_msg:
-            bot.edit_message_text("🔒 YouTube blocked download. Use Play option instead.", chat_id, progress_msg.message_id)
+            bot.edit_message_text("🔒 YouTube blocked download. Try another video.", chat_id, progress_msg.message_id)
         else:
             bot.edit_message_text(f"❌ Error: {error_msg[:100]}", chat_id, progress_msg.message_id)
 
 def download_music_with_progress(video_url, chat_id, message_id):
-    """Download music with progress tracking"""
+    """Download music as file with progress tracking"""
     try:
         progress_msg = bot.send_message(chat_id, "📥 Starting download...")
         
@@ -216,29 +230,19 @@ def download_music_with_progress(video_url, chat_id, message_id):
 
 # ==================== VIDEO HANDLING ====================
 def send_video_options(video_url, chat_id, message_id=None):
-    """Send video options with quality selection"""
+    """Send direct video link with watch button"""
     try:
         info = get_video_info(video_url)
         if not info:
             bot.send_message(chat_id, "❌ Could not get video info")
             return
 
-        caption = f"🎬 *{info['title']}*\n*Channel:* {info.get('uploader', 'Unknown')}\n*Duration:* {info.get('duration', 0)}s\n*Views:* {info.get('view_count', 'N/A')}"
+        caption = f"🎬 *{info['title']}*\n👤 *Channel:* {info.get('uploader', 'Unknown')}\n⏱ *Duration:* {format_duration(info.get('duration', 0))}\n👀 *Views:* {info.get('view_count', 'N/A')}"
 
-        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup = types.InlineKeyboardMarkup()
         
-        # Quality options
-        btn_hd = types.InlineKeyboardButton("📹 HD (1080p)", callback_data=f"video_quality_{video_url}_high")
-        btn_sd = types.InlineKeyboardButton("🎬 SD (720p)", callback_data=f"video_quality_{video_url}_medium")
-        btn_low = types.InlineKeyboardButton("📱 Low (480p)", callback_data=f"video_quality_{video_url}_low")
-        
-        # Action buttons
-        btn_play = types.InlineKeyboardButton("▶️ Play", callback_data=f"video_play_{video_url}")
-        btn_download = types.InlineKeyboardButton("📥 Download", callback_data=f"video_download_{video_url}")
+        # Simple watch button
         btn_watch = types.InlineKeyboardButton("🌐 Watch on YouTube", url=video_url)
-        
-        markup.add(btn_hd, btn_sd, btn_low)
-        markup.add(btn_play, btn_download)
         markup.add(btn_watch)
 
         if message_id:
@@ -248,48 +252,6 @@ def send_video_options(video_url, chat_id, message_id=None):
             
     except Exception as e:
         bot.send_message(chat_id, f"❌ Error: {str(e)[:100]}")
-
-def download_video_with_progress(video_url, chat_id, quality='medium'):
-    """Download video with progress tracking"""
-    try:
-        progress_msg = bot.send_message(chat_id, "📥 Starting video download...")
-        
-        def progress_callback(d):
-            progress_hook(d, chat_id, progress_msg.message_id)
-        
-        if quality == 'high':
-            format_selection = 'best[height<=1080]'
-        elif quality == 'medium':
-            format_selection = 'best[height<=720]'
-        else:
-            format_selection = 'best[height<=480]'
-            
-        ydl_opts = {
-            'format': format_selection,
-            'outtmpl': 'downloads/%(title)s.%(ext)s',
-            'progress_hooks': [progress_callback],
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=True)
-            media_file = ydl.prepare_filename(info)
-            
-            if os.path.exists(media_file):
-                with open(media_file, 'rb') as media:
-                    bot.send_video(chat_id, media, caption=info['title'][:64])
-                
-                os.remove(media_file)
-                bot.delete_message(chat_id, progress_msg.message_id)
-                bot.send_message(chat_id, "✅ Video download completed!")
-            else:
-                bot.edit_message_text("❌ Video download failed", chat_id, progress_msg.message_id)
-                
-    except Exception as e:
-        error_msg = str(e)
-        if "Sign in to confirm" in error_msg:
-            bot.edit_message_text("🔒 YouTube blocked download. Try streaming instead.", chat_id, progress_msg.message_id)
-        else:
-            bot.edit_message_text(f"❌ Download error: {error_msg[:100]}", chat_id, progress_msg.message_id)
 
 # ==================== BOT COMMANDS ====================
 @bot.message_handler(commands=['start'])
@@ -332,7 +294,7 @@ def switch_command(message):
     btn_video = types.InlineKeyboardButton("🎬 Video Player", callback_data="switch_video")
     markup.add(btn_music, btn_video)
     
-    response = "🎛️ *Choose Mode:*\n\n• 🎵 Music - Player controls & downloads\n• 🎬 Video - Streaming & quality options"
+    response = "🎛️ *Choose Mode:*\n\n• 🎵 Music - Player controls & downloads\n• 🎬 Video - Direct YouTube links"
     bot.reply_to(message, response, reply_markup=markup, parse_mode='Markdown')
     
     if str(user_id) != ADMIN_USER_ID:
@@ -360,20 +322,20 @@ def handle_callbacks(call):
         user_sessions[user_id] = {'mode': mode}
         
         if mode == 'music':
-            response = "🎵 *Music Mode*\n\nSend me a song name or artist. I'll show player controls and download options."
+            response = "🎵 *Music Mode*\n\nSend me a song name or artist. I'll send audio files with player controls."
         else:
-            response = "🎬 *Video Mode*\n\nSend me a video title. I'll show streaming and quality options."
+            response = "🎬 *Video Mode*\n\nSend me a video title. I'll show direct YouTube links."
         
         bot.edit_message_text(response, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
     
     elif call.data.startswith('select_music_'):
         video_url = call.data.split('_', 2)[2]
-        bot.edit_message_text("🎵 Loading music options...", call.message.chat.id, call.message.message_id)
-        send_music_options(video_url, call.message.chat.id, call.message.message_id)
+        bot.edit_message_text("🎵 Preparing music...", call.message.chat.id, call.message.message_id)
+        send_music_as_audio(video_url, call.message.chat.id, call.message.message_id)
     
     elif call.data.startswith('select_video_'):
         video_url = call.data.split('_', 2)[2]
-        bot.edit_message_text("🎬 Loading video options...", call.message.chat.id, call.message.message_id)
+        bot.edit_message_text("🎬 Loading video...", call.message.chat.id, call.message.message_id)
         send_video_options(video_url, call.message.chat.id, call.message.message_id)
     
     elif call.data.startswith('music_'):
@@ -382,8 +344,6 @@ def handle_callbacks(call):
         
         if action == 'play':
             bot.answer_callback_query(call.id, "▶️ Playing music...")
-            # Simulate playing (in real bot, you'd stream audio)
-            bot.send_message(call.message.chat.id, f"🎵 Now playing...\n\nUse the player controls above to manage playback.")
         
         elif action == 'pause':
             bot.answer_callback_query(call.id, "⏸️ Music paused")
@@ -391,34 +351,24 @@ def handle_callbacks(call):
         elif action == 'stop':
             bot.answer_callback_query(call.id, "⏹️ Music stopped")
         
-        elif action == 'file':
-            bot.edit_message_text("📁 Sending music file...", call.message.chat.id, call.message.message_id)
-            send_music_file(video_url, call.message.chat.id, call.message.message_id)
+        elif action == 'prev':
+            bot.answer_callback_query(call.id, "⏮️ Previous track")
+        
+        elif action == 'next':
+            bot.answer_callback_query(call.id, "⏭️ Next track")
+        
+        elif action == 'rewind':
+            bot.answer_callback_query(call.id, "⏪ Rewinding")
+        
+        elif action == 'forward':
+            bot.answer_callback_query(call.id, "⏩ Forwarding")
+        
+        elif action == 'lyrics':
+            bot.answer_callback_query(call.id, "📝 Lyrics feature coming soon!")
         
         elif action == 'download':
-            bot.edit_message_text("📥 Starting download...", call.message.chat.id, call.message.message_id)
-            download_music_with_progress(video_url, call.message.chat.id, call.message.message_id)
-    
-    elif call.data.startswith('video_'):
-        action = call.data.split('_')[1]
-        video_url = call.data.split('_', 2)[2]
-        
-        if action == 'play':
-            bot.answer_callback_query(call.id, "▶️ Streaming video...")
-            info = get_video_info(video_url)
-            if info:
-                bot.send_message(call.message.chat.id, 
-                               f"🎬 Now streaming: *{info['title']}*\n\n📺 Stream URL: {video_url}\n\nUse the quality options above.", 
-                               parse_mode='Markdown')
-        
-        elif action == 'download':
-            bot.edit_message_text("📥 Starting video download...", call.message.chat.id, call.message.message_id)
-            download_video_with_progress(video_url, call.message.chat.id)
-        
-        elif action == 'quality':
-            quality = call.data.split('_')[3]
-            bot.edit_message_text(f"📥 Downloading in {quality} quality...", call.message.chat.id, call.message.message_id)
-            download_video_with_progress(video_url, call.message.chat.id, quality)
+            bot.answer_callback_query(call.id, "📥 Downloading...")
+            # You can implement separate download functionality here
 
 # ==================== MESSAGE HANDLERS ====================
 @bot.message_handler(func=lambda message: True)
@@ -451,7 +401,7 @@ def handle_all_messages(message):
         if 'youtube.com' in user_input or 'youtu.be' in user_input:
             # Direct URL
             if mode == 'music':
-                send_music_options(user_input, message.chat.id)
+                send_music_as_audio(user_input, message.chat.id)
             else:
                 send_video_options(user_input, message.chat.id)
         else:
@@ -460,12 +410,17 @@ def handle_all_messages(message):
             results = search_youtube_real(user_input)
             
             if results:
-                response = "📋 *Search Results:*\n\n"
+                if mode == 'music':
+                    response = "🎵 *Music Search Results:*\n\n"
+                else:
+                    response = "🎬 *Video Search Results:*\n\n"
+                    
                 markup = types.InlineKeyboardMarkup()
                 
                 for i, result in enumerate(results[:5], 1):
                     title = result['title'][:50] + "..." if len(result['title']) > 50 else result['title']
-                    response += f"{i}. *{title}*\n   👉 {result['channel']}\n\n"
+                    duration = format_duration(result.get('duration', 0))
+                    response += f"{i}. *{title}*\n   ⏱ {duration} • 👉 {result['channel']}\n\n"
                     
                     if mode == 'music':
                         btn = types.InlineKeyboardButton(f"🎵 Select {i}", callback_data=f"select_music_{result['url']}")
