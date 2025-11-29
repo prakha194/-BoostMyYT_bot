@@ -10,7 +10,7 @@ import time
 # Load environment variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_USER_ID = os.getenv("ADMIN_USER_ID")
-RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "96ea86820dmshde54c3b1d3adcf9p1d64b1jsnb3bce9cbfa4e")
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
 
 # Initialize
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
